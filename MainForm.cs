@@ -22,16 +22,15 @@ public class MainForm : Form
     private ComboBox _cmbStatusFilter = null!;
     private ComboBox _cmbSiteFilter = null!;
     private ComboBox _cmbCategoryFilter = null!;
-    private DataTable _currentDataTable = null!; // Хранилище данных для мгновенного поиска и сортировки
-
-
+    private DataTable _currentDataTable = null!;
 
     private CancellationTokenSource? _cts;
     private readonly IConfiguration _configuration;
 
     // Инфраструктурные сервисы
     private IAiService _aiService = null!;
-    private IPublisherService _publisherService = null!;
+    private IPublisherService _wpPublisherService = null!;
+    private IPublisherService _vkPublisherService = null!; // Для поддержки ВК
     private IContentPlannerService _contentPlanner = null!;
 
     public MainForm(IConfiguration configuration)
@@ -44,13 +43,11 @@ public class MainForm : Form
     private void InitializeComponent()
     {
         this.Text = "Панель управления ИИ-Фабрикой Сайтов";
-        this.Size = new Size(1000, 700); // Немного увеличим окно для удобства
+        this.Size = new Size(1050, 700);
         this.StartPosition = FormStartPosition.CenterScreen;
 
-        // Увеличиваем высоту панели управления до 100 для двух рядов элементов
         Panel topPanel = new Panel { Dock = DockStyle.Top, Height = 100, BackColor = Color.FromArgb(240, 240, 240) };
 
-        // РЯД 1: Кнопки управления и Статус
         _btnStart = new Button { Text = "▶ ЗАПУСТИТЬ БОТА", Location = new Point(15, 12), Size = new Size(160, 32), BackColor = Color.LightGreen, Font = new Font("Segoe UI", 9, FontStyle.Bold) };
         _btnStart.Click += BtnStart_Click;
 
@@ -67,33 +64,28 @@ public class MainForm : Form
         topPanel.Controls.Add(_btnGeneratePlan);
         topPanel.Controls.Add(_lblStatus);
 
-        // РЯД 2: Фильтры (Выпадающие списки)
         Label lblFilters = new Label { Text = "Фильтры:", Location = new Point(15, 62), AutoSize = true, Font = new Font("Segoe UI", 9, FontStyle.Bold) };
         topPanel.Controls.Add(lblFilters);
 
-        // Фильтр по Статусу
         _cmbStatusFilter = new ComboBox { Location = new Point(90, 58), Size = new Size(130, 25), DropDownStyle = ComboBoxStyle.DropDownList };
         _cmbStatusFilter.Items.AddRange(new object[] { "Все статусы", "Pending", "Processing", "Published", "Failed" });
         _cmbStatusFilter.SelectedIndex = 0;
         _cmbStatusFilter.SelectedIndexChanged += ApplyFiltersAndSorting;
 
-        // Фильтр по Сайту
         _cmbSiteFilter = new ComboBox { Location = new Point(235, 58), Size = new Size(130, 25), DropDownStyle = ComboBoxStyle.DropDownList };
-        _cmbSiteFilter.Items.AddRange(new object[] { "Все сайты", "tech-info" }); // Сюда можно дописывать новые ID сайтов
+        _cmbSiteFilter.Items.AddRange(new object[] { "Все сайты", "tech-info", "vk-group" });
         _cmbSiteFilter.SelectedIndex = 0;
         _cmbSiteFilter.SelectedIndexChanged += ApplyFiltersAndSorting;
 
-        // Фильтр по Категории
         _cmbCategoryFilter = new ComboBox { Location = new Point(380, 58), Size = new Size(160, 25), DropDownStyle = ComboBoxStyle.DropDownList };
         _cmbCategoryFilter.Items.AddRange(new object[] { "Все категории", "smart-home", "smartphones", "audio", "gadgets" });
         _cmbCategoryFilter.SelectedIndex = 0;
         _cmbCategoryFilter.SelectedIndexChanged += ApplyFiltersAndSorting;
 
-        topPanel.Controls.Add(_cmbCategoryFilter);
-        topPanel.Controls.Add(_cmbSiteFilter);
         topPanel.Controls.Add(_cmbStatusFilter);
+        topPanel.Controls.Add(_cmbSiteFilter);
+        topPanel.Controls.Add(_cmbCategoryFilter);
 
-        // Таблица и логи
         _taskGrid = new DataGridView
         {
             Dock = DockStyle.Fill,
@@ -104,6 +96,7 @@ public class MainForm : Form
             RowHeadersVisible = false,
             SelectionMode = DataGridViewSelectionMode.FullRowSelect
         };
+        _taskGrid.CellDoubleClick += TaskGrid_CellDoubleClick;
 
         _logTextBox = new TextBox
         {
@@ -123,6 +116,7 @@ public class MainForm : Form
     }
 
 
+
     private void InitializeDependencies()
     {
         // Создаем локальную изолированную фабрику логов для наших внутренних сервисов
@@ -133,7 +127,8 @@ public class MainForm : Form
 
         // Инициализируем сервисы, передавая им строго изолированные логеры
         _aiService = new OpenAiGptService(_configuration, loggerFactory.CreateLogger<OpenAiGptService>());
-        _publisherService = new WordPressPublisherService(_configuration, loggerFactory.CreateLogger<WordPressPublisherService>());
+        _wpPublisherService = new WordPressPublisherService(_configuration, loggerFactory.CreateLogger<WordPressPublisherService>());
+        _vkPublisherService = new VkPublisherService(_configuration, loggerFactory.CreateLogger<VkPublisherService>());
         _contentPlanner = new ContentPlannerService(_aiService);
 
         LogToUi("⚙️ Синхронизация структуры базы данных PostgreSQL через EF Core...");
@@ -172,9 +167,11 @@ public class MainForm : Form
         _cts?.Cancel();
         _btnStart.Enabled = true;
         _btnStop.Enabled = false;
-        _lblStatus.Text = "Статус: Останавливаюсь...";
-        _lblStatus.ForeColor = Color.DarkRed;
+        _btnGeneratePlan.Enabled = true;
+        _lblStatus.Text = "Статус: Робот остановлен";
+        _lblStatus.ForeColor = Color.Gray;
     }
+
 
     private async Task WorkerProcessLoopAsync(CancellationToken token)
     {
@@ -236,33 +233,51 @@ public class MainForm : Form
 
                         try
                         {
-                            // 1. Вызов OpenAI ИИ — получаем текст статьи
                             string articleHtml = await _aiService.GenerateArticleAsync(task.Topic);
 
-                            // 2. СОХРАНЯЕМ В ЛОКАЛЬНЫЙ АРХИВ POSTGRES: Записываем текст в объект задачи
+                            // СОХРАНЕНИЕ В АРХИВ POSTGRES: Записываем HTML-текст в базу
                             task.ContentHtml = articleHtml;
-                            await db.SaveChangesAsync(token); // Мгновенно фиксируем текст в базе на вашем ПК
+                            await db.SaveChangesAsync(token);
+                            Invoke(new Action(() => LogToUi("Статья #" + task.Id + " успешно заархивирована в локальный Postgres.")));
 
-                            Invoke(() => LogToUi($"💾 [Архив] Статья #{task.Id} успешно сохранена в локальный архив Postgres."));
+                            Invoke(new Action(() => LogToUi("Передаю статью конвейеру публикации для платформы: " + task.SiteId)));
 
-                            Invoke(() => LogToUi($"🌐 [Сайт] Начинаю сетевую отправку статьи: \"{task.Topic}\""));
+                            IPublisherService currentPublisher;
 
-                            // 3. Вызов WordPress публикации
-                            bool isPublished = await _publisherService.PublishAsync(task.Topic, articleHtml, task.Category, task.SiteId);
+                            switch (task.SiteId.ToLower().Trim())
+                            {
+                                case "vk-group":
+                                case "vk-page":
+                                    currentPublisher = _vkPublisherService;
+                                    break;
+
+                                // Сюда в будущем в один клик добавятся новые каналы:
+                                // case "telegram-channel":
+                                //     currentPublisher = _tgPublisherService;
+                                //     break;
+
+                                // Все остальные варианты по умолчанию отправляем на WordPress сайты
+                                default:
+                                    currentPublisher = _wpPublisherService;
+                                    break;
+                            }
+
+                            // Вызываем публикацию — код отправки остается единым для любой платформы!
+                            bool isPublished = await currentPublisher.PublishAsync(task.Topic, articleHtml, task.Category, task.SiteId);
 
                             task.Status = isPublished ? Domain.Enums.TaskStatus.Published : Domain.Enums.TaskStatus.Failed;
 
-                            Invoke(() => LogToUi(isPublished
-                                ? $"✅ Статья \"{task.Topic}\" успешно появилась на вашем сайте!"
-                                : "❌ Сервер сайта отклонил публикацию. Текст сохранен в архив базы."));
+                            Invoke(new Action(() => LogToUi(isPublished
+                                ? "Статья успешно появилась в источнике!"
+                                : "Платформа отклонила запрос. Текст сохранен локально.")));
                         }
                         catch (Exception ex)
                         {
-                            // Выводим не только сообщение, но и StackTrace, чтобы понять, какой метод вызвал ошибку
-                            Invoke(() => LogToUi($"❌ Критическая ошибка: {ex.Message}"));
-                            Invoke(() => LogToUi($"🔍 Стек ошибки: {ex.StackTrace}"));
+                            Invoke(new Action(() => LogToUi("Критическая ошибка: " + ex.Message)));
+                            Invoke(new Action(() => LogToUi("Стек ошибки: " + ex.StackTrace)));
                             task.Status = Domain.Enums.TaskStatus.Failed;
                         }
+
 
                         await db.SaveChangesAsync(token);
                         Invoke(RefreshGrid);
@@ -296,10 +311,9 @@ public class MainForm : Form
 
             var list = db.ArticlesQueue
                 .OrderByDescending(t => t.Id)
-                .Take(200) // Берем с запасом последние 200 задач
+                .Take(200)
                 .ToList();
 
-            // 1. Создаем структуру таблицы в памяти
             DataTable dt = new DataTable();
             dt.Columns.Add("Id", typeof(int));
             dt.Columns.Add("Topic", typeof(string));
@@ -308,22 +322,59 @@ public class MainForm : Form
             dt.Columns.Add("Status", typeof(string));
             dt.Columns.Add("CreatedAt", typeof(DateTime));
 
-            // 2. Заполняем таблицу данными из Postgres
             foreach (var task in list)
             {
                 dt.Rows.Add(task.Id, task.Topic, task.Category, task.SiteId, task.Status.ToString(), task.CreatedAt);
             }
 
             _currentDataTable = dt;
-
-            // 3. Вызываем метод применения фильтров
             ApplyFiltersAndSorting(null, EventArgs.Empty);
         }
         catch (Exception ex)
         {
-            LogToUi($"⚠️ Не удалось обновить таблицу данных: {ex.Message}");
+            LogToUi("Не удалось обновить таблицу данных: " + ex.Message);
         }
     }
+
+    private void ApplyFiltersAndSorting(object? sender, EventArgs e)
+    {
+        if (_currentDataTable == null) return;
+
+        DataView dv = new DataView(_currentDataTable);
+        var filterParts = new List<string>();
+
+        if (_cmbStatusFilter.SelectedIndex > 0)
+        {
+            filterParts.Add("Status = '" + _cmbStatusFilter.SelectedItem + "'");
+        }
+
+        if (_cmbSiteFilter.SelectedIndex > 0)
+        {
+            filterParts.Add("SiteId = '" + _cmbSiteFilter.SelectedItem + "'");
+        }
+
+        if (_cmbCategoryFilter.SelectedIndex > 0)
+        {
+            filterParts.Add("Category = '" + _cmbCategoryFilter.SelectedItem + "'");
+        }
+
+        if (filterParts.Count > 0)
+        {
+            dv.RowFilter = string.Join(" AND ", filterParts);
+        }
+        else
+        {
+            dv.RowFilter = "";
+        }
+
+        _taskGrid.DataSource = dv;
+
+        foreach (DataGridViewColumn column in _taskGrid.Columns)
+        {
+            column.SortMode = DataGridViewColumnSortMode.Automatic;
+        }
+    }
+
 
 
     private void LogToUi(string message)
@@ -361,44 +412,26 @@ public class MainForm : Form
             _btnGeneratePlan.Enabled = true;
         }
     }
-    private void ApplyFiltersAndSorting(object? sender, EventArgs e)
+    private void TaskGrid_CellDoubleClick(object? sender, DataGridViewCellEventArgs e)
     {
-        if (_currentDataTable == null) return;
+        // Игнорируем клики по шапке таблицы (индекс строки -1)
+        if (e.RowIndex < 0) return;
 
-        // Создаем представление данных для применения фильтров и сортировки
-        DataView dv = new DataView(_currentDataTable);
-        var filterParts = new System.Collections.Generic.List<string>();
-
-        // 1. Фильтр по статусу
-        if (_cmbStatusFilter.SelectedIndex > 0)
+        try
         {
-            filterParts.Add($"Status = '{_cmbStatusFilter.SelectedItem}'");
-        }
+            // Вытаскиваем Id и Тему прямо из выделенной строки DataGridView
+            var selectedRow = _taskGrid.Rows[e.RowIndex];
+            int taskId = Convert.ToInt32(selectedRow.Cells["Id"].Value);
+            string topic = selectedRow.Cells["Topic"].Value?.ToString() ?? "Без темы";
 
-        // 2. Фильтр по сайту
-        if (_cmbSiteFilter.SelectedIndex > 0)
-        {
-            filterParts.Add($"SiteId = '{_cmbSiteFilter.SelectedItem}'");
+            // Открываем наше новое адаптивное окно просмотра
+            using var viewerForm = new ArticleViewerForm(taskId, topic);
+            viewerForm.ShowDialog(this); // Режим ShowDialog заблокирует заднее окно, пока вы читаете текст
         }
-
-        // 3. Фильтр по категории
-        if (_cmbCategoryFilter.SelectedIndex > 0)
+        catch (Exception ex)
         {
-            filterParts.Add($"Category = '{_cmbCategoryFilter.SelectedItem}'");
+            LogToUi("⚠️ Ошибка при открытии окна просмотра: " + ex.Message);
         }
-
-        // Если есть активные фильтры, объединяем их через AND
-        if (filterParts.Count > 0)
-        {
-            dv.RowFilter = string.Join(" AND ", filterParts);
-        }
-        else
-        {
-            dv.RowFilter = ""; // Сброс фильтров (показать всё)
-        }
-
-        // Привязываем DataView к сетке. Теперь клики по колонкам для СОРТИРОВКИ заработают автоматически!
-        _taskGrid.DataSource = dv;
     }
 
 }
