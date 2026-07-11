@@ -1,11 +1,14 @@
-﻿using AiSiteFiller.Application.Interfaces;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
+﻿using System;
+using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+using AiSiteFiller.Application.Interfaces;
 
 namespace AiSiteFiller.Infrastructure.Services;
 
@@ -14,7 +17,7 @@ public class OpenAiGptService : IAiService
     private readonly HttpClient _httpClient;
     private readonly ILogger<OpenAiGptService> _logger;
     private readonly string _apiKey;
-    private readonly string _absoluteUrl; // Будем хранить готовый абсолютный URL-адрес
+    private readonly string _absoluteUrl;
 
     public OpenAiGptService(IConfiguration configuration, ILogger<OpenAiGptService> logger)
     {
@@ -29,29 +32,30 @@ public class OpenAiGptService : IAiService
             throw new ArgumentNullException(nameof(rawApiKey));
         }
 
-        // ЖЕСТКАЯ ВЫЧИСТКА: Выжигаем любые не-ASCII символы, пробелы и невидимый мусор из ключа и URL
+        // ЖЕСТКАЯ ВЫЧИСТКА: Удаляем любые не-ASCII символы и скрытый мусор из токена и URL
         _apiKey = Regex.Replace(rawApiKey, @"[^a-zA-Z0-9_\-\+]", "").Trim();
         string cleanBaseUrl = Regex.Replace(rawBaseUrl, @"[^a-zA-Z0-9\.\:\/\-]", "").Trim();
 
+        // Если в конфиге пусто, по умолчанию ставим оригинальный адрес OpenAI
         if (string.IsNullOrEmpty(cleanBaseUrl))
         {
-            cleanBaseUrl = "https://openai.com";
+            cleanBaseUrl = "https://api.openai.com";
         }
 
-        if (!cleanBaseUrl.EndsWith("/"))
+        // Нормализуем слеши на концах URL
+        if (cleanBaseUrl.EndsWith("/"))
         {
-            cleanBaseUrl += "/";
+            cleanBaseUrl = cleanBaseUrl.TrimEnd('/');
         }
 
-        // Собираем кристально чистый абсолютный путь для запросов
-        _absoluteUrl = cleanBaseUrl + "chat/completions";
+        // СБОРКА АБСОЛЮТНОГО ПУТИ: Теперь адрес будет собираться идеально точно под любой шлюз
+        _absoluteUrl = cleanBaseUrl + "/v1/chat/completions";
 
-        // Настраиваем хендлер: отключаем прокси, системные креды и ОПАСНЫЕ автоматические редиректы
         var handler = new HttpClientHandler
         {
             UseDefaultCredentials = false,
             UseProxy = false,
-            AllowAutoRedirect = false // ◄── Запрещаем скрытые прыжки по адресам, вызывающие ошибку
+            AllowAutoRedirect = false
         };
 
         _httpClient = new HttpClient(handler);
@@ -68,7 +72,7 @@ public class OpenAiGptService : IAiService
         
         Требования к тексту:
         1. Напиши статью в формате HTML (используй теги <h2>, <h3>, <p>, <ul>, <li>, <strong>). Не используй обертки ```html или теги <html>, <head>, <body>.
-        2. Структура: Введение, детальный разбор (3-4 подзаголовка),超 блок с плюсами и минусами, краткий вывод.
+        2. Структура: Введение, детальный разбор (3-4 подзаголовка), блок с плюсами и минусами, краткий вывод.
         3. Добавь в текст одну логическую таблицу (тег <table>) с ключевыми характеристиками или сравнением.
         4. Тон автора: дружелюбный, экспертный, без «воды» и банальных фраз. Пиши для людей.
         5. Объем: не менее 4000 знаков.";
@@ -79,7 +83,7 @@ public class OpenAiGptService : IAiService
             Temperature = 0.7f,
             Messages = new[]
             {
-                new OpenAiMessage { Role = "system", Content = "Ты professional SEO copywriter." },
+                new OpenAiMessage { Role = "system", Content = "Ты профессиональный SEO-копирайтер и эксперт в сфере гаджетов и умного дома." },
                 new OpenAiMessage { Role = "user", Content = prompt }
             }
         };
@@ -87,7 +91,7 @@ public class OpenAiGptService : IAiService
         var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
         string jsonString = JsonSerializer.Serialize(requestBody, jsonOptions);
 
-        // КРИТИЧЕСКИЙ ФИКС: Передаем СТРОГО абсолютный, очищенный URI без относительных путей
+        // Отправляем запрос строго на верифицированный абсолютный URI шлюза
         var request = new HttpRequestMessage(HttpMethod.Post, new Uri(_absoluteUrl));
 
         request.Headers.Clear();
@@ -123,7 +127,7 @@ public class OpenAiGptService : IAiService
         }
         catch (Exception ex)
         {
-            _logger.LogError("❌ Исключение при работе с OpenAI API.");
+            _logger.LogError(ex, "❌ Исключение при работе с OpenAI API.");
             throw;
         }
     }

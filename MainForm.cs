@@ -208,9 +208,9 @@ public class MainForm : Form
 
                             // Выводим информацию на экран WinForms в безопасном режиме
                             Invoke(() => LogToUi($"🌐 [Сайт] Начинаю сетевую отправку статьи: \"{task.Topic}\""));
-
-                            // 2. Вызов WordPress публикации (внутри него теперь только чистый ASCII)
-                            bool isPublished = await _publisherService.PublishAsync(task.Topic, articleHtml, task.Category);
+                            
+                            // 2. Вызов мультисайтовой WordPress публикации
+                            bool isPublished = await _publisherService.PublishAsync(task.Topic, articleHtml, task.Category, task.SiteId);
 
                             task.Status = isPublished ? Domain.Enums.TaskStatus.Published : Domain.Enums.TaskStatus.Failed;
 
