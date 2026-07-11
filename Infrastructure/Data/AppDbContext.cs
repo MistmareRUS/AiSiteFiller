@@ -1,0 +1,38 @@
+﻿using AiSiteFiller.Domain.Entities;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+
+namespace AiSiteFiller.Infrastructure.Data;
+
+public class AppDbContext : DbContext
+{
+    public DbSet<ArticleTask> ArticlesQueue => Set<ArticleTask>();
+
+    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
+    {
+        // Строим конфигурацию из файла appsettings.json
+        var configuration = new ConfigurationBuilder()
+            .SetBasePath(Directory.GetCurrentDirectory())
+            .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
+            .Build();
+
+        string? connectionString = configuration.GetConnectionString("PostgresConnection");
+        optionsBuilder.UseNpgsql(connectionString);
+    }
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        base.OnModelCreating(modelBuilder);
+
+        modelBuilder.Entity<ArticleTask>(entity =>
+        {
+            entity.ToTable("articles_queue");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.Topic).HasColumnName("topic").IsRequired();
+            entity.Property(e => e.Category).HasColumnName("category").HasMaxLength(100).IsRequired();
+            entity.Property(e => e.Status).HasColumnName("status").HasMaxLength(50).HasConversion<string>().IsRequired();
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
+        });
+    }
+}
