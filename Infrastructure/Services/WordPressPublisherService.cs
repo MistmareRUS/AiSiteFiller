@@ -16,7 +16,7 @@ public class WordPressPublisherService : IPublisherService
 {
     private readonly HttpClient _httpClient;
     private readonly ILogger<WordPressPublisherService> _logger;
-    private readonly string _authToken; // Будем хранить токен отдельно, а не в DefaultRequestHeaders
+    private readonly string _authToken;
 
     public WordPressPublisherService(IConfiguration configuration, ILogger<WordPressPublisherService> logger)
     {
@@ -26,6 +26,7 @@ public class WordPressPublisherService : IPublisherService
         string rawUsername = configuration["WordPressOptions:Username"] ?? string.Empty;
         string rawAppPassword = configuration["WordPressOptions:AppPassword"] ?? string.Empty;
 
+        // Жесткая вычистка от любого мусора
         string cleanUrl = Regex.Replace(rawBaseUrl, @"[^a-zA-Z0-9\.\:\/\-]", "").Trim();
         string cleanUsername = Regex.Replace(rawUsername, @"[^a-zA-Z0-9_\-\.\@]", "").Trim();
         string cleanPassword = Regex.Replace(rawAppPassword, @"[^a-zA-Z0-9 ]", "").Trim();
@@ -35,14 +36,13 @@ public class WordPressPublisherService : IPublisherService
             cleanUrl = "http://" + cleanUrl;
         }
 
-        // КРИТИЧЕСКИЙ МОМЕНТ: Инициализируем абсолютно чистый HttpClient без системных заголовков Windows
+        // Чистый хендлер, игнорирующий региональные системные креды Windows
         var handler = new HttpClientHandler { UseDefaultCredentials = false };
         _httpClient = new HttpClient(handler)
         {
             BaseAddress = new Uri(cleanUrl)
         };
 
-        // Полностью очищаем все заголовки по умолчанию, которые .NET мог подтянуть из ОС
         _httpClient.DefaultRequestHeaders.Clear();
 
         string rawCredentials = $"{cleanUsername}:{cleanPassword}";
@@ -52,7 +52,8 @@ public class WordPressPublisherService : IPublisherService
 
     public async Task<bool> PublishAsync(string title, string contentHtml, string category)
     {
-        _logger.LogInformation("🌐 Отправка статьи в WordPress REST API. Название: \"{Title}\"", title);
+        // ВАЖНО: Убираем кириллический title из системных логов СЕТЕВОГО класса, чтобы не провоцировать ошибку ASCII
+        _logger.LogInformation("🌐 [WordPress] Sending POST request to REST API...");
 
         var wpId = AiSiteFiller.Domain.Constants.AppCategories.GetWordPressId(category);
 
@@ -67,36 +68,35 @@ public class WordPressPublisherService : IPublisherService
         var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
         string jsonBody = JsonSerializer.Serialize(postData, jsonOptions);
 
-        // Формируем низкоуровневый HttpRequestMessage вручную, чтобы контролировать каждый байт заголовков
+        // Формируем низкоуровневый HttpRequestMessage, изолируя заголовки от тела
         var request = new HttpRequestMessage(HttpMethod.Post, "/wp-json/wp/v2/posts");
 
-        // Добавляем заголовки СТРОГО в ASCII
         request.Headers.Clear();
         request.Headers.TryAddWithoutValidation("Authorization", $"Basic {_authToken}");
         request.Headers.TryAddWithoutValidation("Connection", "close");
 
-        var content = new StringContent(jsonBody, Encoding.UTF8);
+        // Передаем строго массив UTF-8 байт вместо сырой C# строки с русскими буквами
+        byte[] jsonBytes = Encoding.UTF8.GetBytes(jsonBody);
+        var content = new ByteArrayContent(jsonBytes);
         content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
         request.Content = content;
 
         try
         {
-            // Отправляем изолированный запрос
             HttpResponseMessage response = await _httpClient.SendAsync(request);
 
             if (response.IsSuccessStatusCode)
             {
-                _logger.LogInformation("✅ Статья '{Title}' успешно опубликована на движке WordPress!", title);
                 return true;
             }
 
             string errorContent = await response.Content.ReadAsStringAsync();
-            _logger.LogError("❌ Сервер WordPress отклонил запрос. Код: {Code}, Текст ошибки: {Error}", response.StatusCode, errorContent);
+            _logger.LogError("❌ WordPress server rejected request. HTTP Status: {Code}, Error: {Error}", response.StatusCode, errorContent);
             return false;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "❌ Сетевое исключение при отправке в WordPress для статьи: \"{Title}\"", title);
+            _logger.LogError(ex, "❌ Network exception occurred during WordPress sync.");
             return false;
         }
     }

@@ -179,11 +179,18 @@ public class MainForm : Form
                             // 1. Вызов OpenAI ИИ
                             string articleHtml = await _aiService.GenerateArticleAsync(task.Topic);
 
-                            // 2. Вызов WordPress публикации
+                            // Выводим информацию на экран WinForms в безопасном режиме
+                            Invoke(() => LogToUi($"🌐 [Сайт] Начинаю сетевую отправку статьи: \"{task.Topic}\""));
+
+                            // 2. Вызов WordPress публикации (внутри него теперь только чистый ASCII)
                             bool isPublished = await _publisherService.PublishAsync(task.Topic, articleHtml, task.Category);
 
                             task.Status = isPublished ? Domain.Enums.TaskStatus.Published : Domain.Enums.TaskStatus.Failed;
-                            Invoke(() => LogToUi(isPublished ? $"✅ Успешно опубликовано!" : "❌ Ошибка публикации."));
+
+                            // Красивый лог на экран
+                            Invoke(() => LogToUi(isPublished
+                                ? $"✅ Статья \"{task.Topic}\" успешно появилась на вашем сайте!"
+                                : "❌ Сервер сайта отклонил публикацию (проверьте логин/пароль приложения)."));
                         }
                         catch (Exception ex)
                         {
