@@ -134,6 +134,66 @@ public class OpenAiGptService : IAiService
         }
     }
 
+    public async Task<string> GenerateImageAsync(string topic)
+    {
+        _logger.LogInformation("[ИИ] Создаю промпт для генерации обложки...");
+
+        // Шаг A: Переводим тему статьи в качественный англоязычный промпт для генератора картинок
+        string promptForVisual = "Create a photorealistic, modern, high-tech promo illustration for an article about: " + topic +
+                                 ". Clean composition, studio lighting, technology style, 8k resolution, commercial photography look. No text, no words, no signs inside the image.";
+
+        var imageRequestBody = new OpenAiImageRequest
+        {
+            Model = "dall-e-3",
+            Prompt = promptForVisual,
+            Size = "1024x1024"
+        };
+
+        string jsonString = JsonSerializer.Serialize(imageRequestBody);
+
+        // Собираем точный адрес эндпоинта для картинок. Наш _absoluteUrl вел на chat/completions, 
+        // поэтому мы динамически подменяем хвост на images/generations
+        string imageApiUrl = _absoluteUrl.Replace("chat/completions", "images/generations");
+
+        var request = new HttpRequestMessage(HttpMethod.Post, new Uri(imageApiUrl));
+        request.Headers.Clear();
+        request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + _apiKey);
+        request.Headers.TryAddWithoutValidation("Connection", "close");
+
+        byte[] jsonBytes = Encoding.UTF8.GetBytes(jsonString);
+        var content = new ByteArrayContent(jsonBytes);
+        content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
+        request.Content = content;
+
+        try
+        {
+            _logger.LogInformation("[ИИ] Отправляю запрос в DALL-E 3 через ProxyAPI...");
+            HttpResponseMessage response = await _httpClient.SendAsync(request);
+
+            if (response.IsSuccessStatusCode)
+            {
+                string responseString = await response.Content.ReadAsStringAsync();
+                var result = JsonSerializer.Deserialize<OpenAiImageResponse>(responseString);
+
+                if (result?.Data != null && result.Data.Length > 0)
+                {
+                    string imageUrl = result.Data[0].Url;
+                    _logger.LogInformation("[ИИ] Картинка успешно сгенерирована нейросетью.");
+                    return imageUrl;
+                }
+            }
+
+            string errorBody = await response.Content.ReadAsStringAsync();
+            throw new Exception("DALL-E API returned error: " + errorBody);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError("❌ Ошибка при генерации изображения: " + ex.Message);
+            throw;
+        }
+    }
+
+
     private class OpenAiChatRequest
     {
         [JsonPropertyName("model")] public string Model { get; set; } = "gpt-4o-mini";
@@ -156,4 +216,27 @@ public class OpenAiGptService : IAiService
     {
         [JsonPropertyName("message")] public OpenAiMessage? Message { get; set; }
     }
+
+    #region Вспомогательные DTO-классы для картинок
+
+    private class OpenAiImageRequest
+    {
+        [JsonPropertyName("model")] public string Model { get; set; } = "dall-e-3";
+        [JsonPropertyName("prompt")] public string Prompt { get; set; } = string.Empty;
+        [JsonPropertyName("n")] public int N { get; set; } = 1;
+        [JsonPropertyName("size")] public string Size { get; set; } = "1024x1024";
+    }
+
+    private class OpenAiImageResponse
+    {
+        [JsonPropertyName("data")] public ImageData[]? Data { get; set; }
+    }
+
+    private class ImageData
+    {
+        [JsonPropertyName("url")] public string Url { get; set; } = string.Empty;
+    }
+
+    #endregion
+
 }
