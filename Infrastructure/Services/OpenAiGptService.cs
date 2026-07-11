@@ -15,10 +15,12 @@ public class OpenAiGptService : IAiService
     private readonly ILogger<OpenAiGptService> _logger;
     private readonly string _apiKey;
     private readonly string _absoluteUrl;
+    private readonly IConfiguration _configuration;
 
     public OpenAiGptService(IConfiguration configuration, ILogger<OpenAiGptService> logger)
     {
         _logger = logger;
+        _configuration = configuration;
 
         string rawApiKey = configuration["OpenAiOptions:ApiKey"] ?? string.Empty;
         string rawBaseUrl = configuration["OpenAiOptions:BaseUrl"] ?? string.Empty;
@@ -133,59 +135,62 @@ public class OpenAiGptService : IAiService
 
     public async Task<string> GenerateImageAsync(string topic)
     {
-        _logger.LogInformation("[ИИ] Создаю промпт для генерации обложки...");
+        _logger.LogInformation("[Локальный ИИ] Формирую промпт для RTX 4070 Super...");
 
-        // Шаг A: Переводим тему статьи в качественный англоязычный промпт для генератора картинок
-        string promptForVisual = "Create a photorealistic, modern, high-tech promo illustration for an article about: " + topic +
-                                 ". Clean composition, studio lighting, technology style, 8k resolution, commercial photography look. No text, no words, no signs inside the image.";
+        // Качественный промпт для Stable Diffusion XL
+        string localPrompt = "Photorealistic modern illustration for tech article: " + topic +
+                             ", studio lighting, commercial photography, highly detailed, 8k, no text, no words.";
 
-        var imageRequestBody = new OpenAiImageRequest
+        // Формируем JSON-запрос под спецификацию API Automatic1111
+        var requestBody = new
         {
-            Model = "dall-e-3",
-            Prompt = promptForVisual,
-            Size = "1024x1024"
+            prompt = localPrompt,
+            negative_prompt = "text, words, low quality, bad hands, blurry, drawing, painting, cartoon",
+            steps = 25,          // Количество шагов прорисовки (25 идеальный баланс скорости и качества)
+            cfg_scale = 7,       // Насколько строго следовать тексту
+            width = 1024,        // Ширина картинки
+            height = 576,        // Идеальный горизонтальный размер 16:9 для обложек сайтов
+            sampler_name = "Euler a"
         };
 
-        string jsonString = JsonSerializer.Serialize(imageRequestBody);
+        string jsonString = JsonSerializer.Serialize(requestBody);
 
-        // Собираем точный адрес эндпоинта для картинок. Наш _absoluteUrl вел на chat/completions, 
-        // поэтому мы динамически подменяем хвост на images/generations
-        string imageApiUrl = _absoluteUrl.Replace("chat/completions", "images/generations");
+        // Стучимся на локальный порт вашей запущенной нейросети
+        string localSdUrl = "http://127.0.0";
 
-        var request = new HttpRequestMessage(HttpMethod.Post, new Uri(imageApiUrl));
-        request.Headers.Clear();
-        request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + _apiKey);
-        request.Headers.TryAddWithoutValidation("Connection", "close");
+        using var localClient = new HttpClient();
+        var request = new HttpRequestMessage(HttpMethod.Post, new Uri(localSdUrl));
 
         byte[] jsonBytes = Encoding.UTF8.GetBytes(jsonString);
         var content = new ByteArrayContent(jsonBytes);
-        content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
+        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
         request.Content = content;
 
         try
         {
-            _logger.LogInformation("[ИИ] Отправляю запрос в DALL-E 3 через ProxyAPI...");
-            HttpResponseMessage response = await _httpClient.SendAsync(request);
+            _logger.LogInformation("[Локальный ИИ] Видеокарта RTX 4070 Super начала генерацию графики...");
+            HttpResponseMessage response = await localClient.SendAsync(request);
+            string responseString = await response.Content.ReadAsStringAsync();
 
             if (response.IsSuccessStatusCode)
             {
-                string responseString = await response.Content.ReadAsStringAsync();
-                var result = JsonSerializer.Deserialize<OpenAiImageResponse>(responseString);
+                // Парсим стандартный ответ Automatic1111
+                using var doc = JsonDocument.Parse(responseString);
+                var imagesArray = doc.RootElement.GetProperty("images");
 
-                if (result?.Data != null && result.Data.Length > 0 && !string.IsNullOrEmpty(result.Data[0].B64Json))
+                if (imagesArray.GetArrayLength() > 0)
                 {
-                    _logger.LogInformation("[ИИ] Картинка успешно получена в формате Base64.");
-                    // Возвращаем готовую Base64 строку вместо ссылки
-                    return result.Data[0].B64Json;
+                    _logger.LogInformation("✅ [Локальный ИИ] Картинка успешно сгенерирована на вашем ПК!");
+                    // Получаем чистый Base64-код первой сгенерированной картинки
+                    return imagesArray[0].GetString() ?? string.Empty;
                 }
             }
 
-            string errorBody = await response.Content.ReadAsStringAsync();
-            throw new Exception("DALL-E API returned error: " + errorBody);
+            throw new Exception("Локальный SD API вернул ошибку: " + response.StatusCode);
         }
         catch (Exception ex)
         {
-            _logger.LogError("❌ Ошибка при генерации изображения: " + ex.Message);
+            _logger.LogError("❌ Ошибка локальной генерации на GPU: " + ex.Message);
             throw;
         }
     }
@@ -217,13 +222,12 @@ public class OpenAiGptService : IAiService
     #region Вспомогательные DTO-классы для картинок
     private class OpenAiImageRequest
     {
-        [JsonPropertyName("model")] public string Model { get; set; } = "openai/gpt-image-1.5";
+        [JsonPropertyName("model")] public string Model { get; set; } = "gpt-image-1.5";
 
         [JsonPropertyName("prompt")] public string Prompt { get; set; } = string.Empty;
         [JsonPropertyName("n")] public int N { get; set; } = 1;
         [JsonPropertyName("size")] public string Size { get; set; } = "1024x1024";
     }
-
 
     private class OpenAiImageResponse
     {
