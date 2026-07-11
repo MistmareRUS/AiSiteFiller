@@ -1,6 +1,9 @@
-﻿namespace AiSiteFiller.Application.Interfaces;
+﻿using System.Threading.Tasks;
+
+namespace AiSiteFiller.Application.Interfaces;
 
 public interface IPublisherService
 {
-    Task<bool> PublishAsync(string title, string contentHtml, string category, string siteId);
+    // Универсальный метод для отправки куда угодно (на сайт, в ВК, в ТГ)
+    Task<bool> PublishAsync(string title, string contentHtml, string metadata, string siteId);
 }

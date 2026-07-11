@@ -36,6 +36,8 @@ public class AppDbContext : DbContext
             entity.Property(e => e.Status).HasColumnName("status").HasMaxLength(50).HasConversion<string>().IsRequired();
             entity.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
             entity.Property(e => e.SiteId).HasColumnName("site_id").HasMaxLength(100).IsRequired(false);
+            entity.Property(e => e.ContentHtml).HasColumnName("content_html").IsRequired(false);
+
 
         });
     }

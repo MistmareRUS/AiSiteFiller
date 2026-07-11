@@ -10,6 +10,8 @@ public class ArticleTask
 
     public string SiteId { get; set; } = string.Empty;
 
+    public string? ContentHtml { get; set; }
+
     public TaskStatus Status { get; set; } = TaskStatus.Pending;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
