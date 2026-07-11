@@ -1,14 +1,11 @@
-﻿using System;
-using System.Net.Http;
+﻿using AiSiteFiller.Application.Interfaces;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
-using System.Threading.Tasks;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
-using AiSiteFiller.Application.Interfaces;
 
 namespace AiSiteFiller.Infrastructure.Services;
 

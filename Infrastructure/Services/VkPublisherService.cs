@@ -1,10 +1,6 @@
-﻿using System;
-using System.Net.Http;
-using System.Text;
-using System.Threading.Tasks;
+﻿using AiSiteFiller.Application.Interfaces;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using AiSiteFiller.Application.Interfaces;
 
 namespace AiSiteFiller.Infrastructure.Services;
 
@@ -30,7 +26,7 @@ public class VkPublisherService : IPublisherService
         };
     }
 
-    public async Task<bool> PublishAsync(string title, string contentHtml, string metadata, string siteId)
+    public async Task<bool> PublishAsync(string title, string contentHtml, string metadata, string siteId, string imageUrl)
     {
         _logger.LogInformation("[VK] Начинаю подготовку публикации статьи в сообщество...");
 

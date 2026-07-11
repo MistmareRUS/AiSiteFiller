@@ -233,12 +233,25 @@ public class MainForm : Form
 
                         try
                         {
+                            // 1. Генерация текста статьи через ИИ
                             string articleHtml = await _aiService.GenerateArticleAsync(task.Topic);
 
-                            // СОХРАНЕНИЕ В АРХИВ POSTGRES: Записываем HTML-текст в базу
+                            // 2. Резервное сохранение текста статьи в архив PostgreSQL на вашем ПК
                             task.ContentHtml = articleHtml;
                             await db.SaveChangesAsync(token);
                             Invoke(new Action(() => LogToUi("Статья #" + task.Id + " успешно заархивирована в локальный Postgres.")));
+
+                            // 3. НОВЫЙ ЭТАП: Генерация уникальной графической обложки в DALL-E 3
+                            string generatedImageUrl = string.Empty;
+                            try
+                            {
+                                Invoke(new Action(() => LogToUi("Создаю уникальную нейроиллюстрацию в DALL-E 3...")));
+                                generatedImageUrl = await _aiService.GenerateImageAsync(task.Topic);
+                            }
+                            catch (Exception imgEx)
+                            {
+                                Invoke(new Action(() => LogToUi("⚠️ Сбой генерации картинки (пропускаю): " + imgEx.Message)));
+                            }
 
                             Invoke(new Action(() => LogToUi("Передаю статью конвейеру публикации для платформы: " + task.SiteId)));
 
@@ -262,8 +275,8 @@ public class MainForm : Form
                                     break;
                             }
 
-                            // Вызываем публикацию — код отправки остается единым для любой платформы!
-                            bool isPublished = await currentPublisher.PublishAsync(task.Topic, articleHtml, task.Category, task.SiteId);
+                            // 4. Публикация статьи вместе со ссылкой на сгенерированную картинку
+                            bool isPublished = await currentPublisher.PublishAsync(task.Topic, articleHtml, task.Category, task.SiteId, generatedImageUrl);
 
                             task.Status = isPublished ? Domain.Enums.TaskStatus.Published : Domain.Enums.TaskStatus.Failed;
 
