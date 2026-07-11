@@ -135,46 +135,92 @@ public class OpenAiGptService : IAiService
 
     public async Task<string> GenerateImageAsync(string topic)
     {
-        _logger.LogInformation("[Локальный ИИ] Формирую промпт для вашей видеокарты...");
+        _logger.LogInformation("[ИИ] Перевожу тему статьи в англоязычный промпт для GPU...");
 
-        // Качественный промпт для Stable Diffusion XL / Juggernaut XL
-        string localPrompt = "Photorealistic modern illustration for technical article about " + topic +
-                             ", studio lighting, commercial photography, highly detailed, 8k, no text, no words.";
+        // 1. Формируем микро-запрос к текстовому ИИ для создания правильного промпта
+        string translationPrompt = "Напиши краткое (до 15 слов) описание для генерации картинки в Stable Diffusion на английском языке для статьи на тему: \"" + topic + "\". " +
+                                   "В описании должен быть только конкретный предмет статьи крупным планом. Не используй абстрактные понятия. Ответь СТРОГО на английском языке, без кавычек и вводных слов.";
 
-        var requestBody = new
+        var requestBodyText = new
         {
-            prompt = localPrompt,
-            negative_prompt = "text, words, low quality, bad hands, blurry, drawing, painting, cartoon, signs, labels",
-            steps = 20,          // 20 шагов — идеальный баланс скорости и качества на 4070 Super
-            cfg_scale = 7,
-            width = 1024,
-            height = 576,        // Формат 16:9 для обложек на вашем сайте
-            sampler_name = "Euler a"
+            model = "gpt-4o-mini",
+            temperature = 0.5f,
+            messages = new[]
+            {
+            new { role = "system", content = "You are a professional prompt engineer for Stable Diffusion. Output only pure English prompt." },
+            new { role = "user", content = translationPrompt }
+        }
         };
 
         var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
-        string jsonString = JsonSerializer.Serialize(requestBody, jsonOptions);
+        string textJsonString = JsonSerializer.Serialize(requestBodyText, jsonOptions);
 
-        // Точный локальный URI вашего запущенного сервера Automatic1111
-        string localSdUrl = "http://127.0.0";
+        // Сначала стучимся в текстовый ИИ шлюза ProxyAPI
+        var textRequest = new HttpRequestMessage(HttpMethod.Post, new Uri(_absoluteUrl));
+        textRequest.Headers.Clear();
+        textRequest.Headers.TryAddWithoutValidation("Authorization", "Bearer " + _apiKey);
+        textRequest.Headers.TryAddWithoutValidation("Connection", "close");
 
-        // КРИТИЧЕСКИЙ ФИКС: Создаем полностью чистый, изолированный клиент для работы внутри ПК
-        var handler = new HttpClientHandler { UseDefaultCredentials = false, UseProxy = false };
-        using var localClient = new HttpClient(handler);
+        var textContent = new ByteArrayContent(Encoding.UTF8.GetBytes(textJsonString));
+        textContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
+        textRequest.Content = textContent;
+
+        string englishVisualPrompt = "Modern high-tech gadget placeholder";
+        try
+        {
+            HttpResponseMessage textResponse = await _httpClient.SendAsync(textRequest);
+            if (textResponse.IsSuccessStatusCode)
+            {
+                string textResponseString = await textResponse.Content.ReadAsStringAsync();
+                using var textDoc = JsonDocument.Parse(textResponseString);
+                var choices = textDoc.RootElement.GetProperty("choices");
+                if (choices.GetArrayLength() > 0)
+                {
+                    englishVisualPrompt = choices[0].GetProperty("message").GetProperty("content").GetString() ?? englishVisualPrompt;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("⚠️ Не удалось перевести промпт через ИИ, использую базовый: " + ex.Message);
+        }
+
+        // Вычищаем промпт от возможных кавычек, которые ИИ мог случайно вернуть
+        englishVisualPrompt = englishVisualPrompt.Trim('"', '\'', ' ');
+        _logger.LogInformation("[Локальный ИИ] Итоговый англоязычный промпт для 4070 Super: " + englishVisualPrompt);
+
+        // 2. Теперь передаем этот кристально чистый английский промпт в вашу видеокарту
+        string localPrompt = "Photorealistic macro studio photography of " + englishVisualPrompt +
+                             ", high-tech style, professional product shot, soft commercial lighting, highly detailed, 8k, no text, no words, crisp focus.";
+
+        var imageRequestBody = new
+        {
+            prompt = localPrompt,
+            negative_prompt = "text, words, logo, watermark, low quality, bad hands, blurry, drawing, painting, cartoon, signs, car, vehicle, wheels",
+            steps = 22,
+            cfg_scale = 7,
+            width = 1024,
+            height = 576,
+            sampler_name = "Euler a"
+        };
+
+        string imageJsonString = JsonSerializer.Serialize(imageRequestBody, jsonOptions);
+        string localSdUrl = "http://localhost:7860/sdapi/v1/txt2img";
+
+        var socketsHandler = new SocketsHttpHandler { UseProxy = false, Proxy = null, AllowAutoRedirect = false };
+        using var localClient = new HttpClient(socketsHandler);
         localClient.DefaultRequestHeaders.Clear();
+        localClient.DefaultRequestHeaders.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
 
         var request = new HttpRequestMessage(HttpMethod.Post, new Uri(localSdUrl));
-
-        byte[] jsonBytes = Encoding.UTF8.GetBytes(jsonString);
+        byte[] jsonBytes = Encoding.UTF8.GetBytes(imageJsonString);
         var content = new ByteArrayContent(jsonBytes);
         content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
         request.Content = content;
 
         try
         {
-            _logger.LogInformation("[Локальный ИИ] Отправляю задачу на генерацию по адресу: " + localSdUrl);
-
-            // Отправляем пакет напрямую в вашу видеокарту в обход ProxyAPI
+            _logger.LogInformation("[Локальный ИИ] Отправляю прямой запрос на GPU по адресу: " + localSdUrl);
             HttpResponseMessage response = await localClient.SendAsync(request);
             string responseString = await response.Content.ReadAsStringAsync();
 
@@ -182,16 +228,13 @@ public class OpenAiGptService : IAiService
             {
                 using var doc = JsonDocument.Parse(responseString);
                 var imagesArray = doc.RootElement.GetProperty("images");
-
-                if (imagesArray.GetArrayLength() > 0)
+                if (imagesArray.ValueKind == JsonValueKind.Array && imagesArray.GetArrayLength() > 0)
                 {
                     _logger.LogInformation("✅ [Локальный ИИ] Картинка успешно сгенерирована на GPU!");
-                    // Возвращаем чистый Base64 код первой картинки из массива
                     return imagesArray[0].GetString() ?? string.Empty;
                 }
             }
-
-            throw new Exception("Локальный SD API вернул ошибку: " + response.StatusCode + ", Текст: " + responseString);
+            throw new Exception("Локальный SD API вернул ошибку: " + response.StatusCode);
         }
         catch (Exception ex)
         {
@@ -199,7 +242,6 @@ public class OpenAiGptService : IAiService
             throw;
         }
     }
-
 
     private class OpenAiChatRequest
     {

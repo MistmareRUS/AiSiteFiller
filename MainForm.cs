@@ -26,6 +26,8 @@ public class MainForm : Form
     private ComboBox _cmbSiteFilter = null!;
     private ComboBox _cmbCategoryFilter = null!;
     private DataTable _currentDataTable = null!;
+    private Button _btnAddTask = null!;
+
 
     private CancellationTokenSource? _cts;
     private readonly IConfiguration _configuration;
@@ -71,6 +73,13 @@ public class MainForm : Form
         topPanel.Controls.Add(_btnStart);
         topPanel.Controls.Add(_btnStop);
         topPanel.Controls.Add(_btnGeneratePlan);
+        _btnAddTask = new Button { Text = "➕ ДОБАВИТЬ ТЕМУ", Location = new Point(515, 12), Size = new Size(140, 32), BackColor = Color.LightYellow, Font = new Font("Segoe UI", 9, FontStyle.Bold) };
+        _btnAddTask.Click += BtnAddTask_Click;
+        topPanel.Controls.Add(_btnAddTask);
+
+        // Сдвиньте текстовый статус чуть правее (на координату X = 670), чтобы элементы не накладывались:
+        _lblStatus = new Label { Text = "Статус: Робот остановлен", Location = new Point(670, 18), Size = new Size(350, 20), Font = new Font("Segoe UI", 10, FontStyle.Bold), ForeColor = Color.Gray };
+
         topPanel.Controls.Add(_lblStatus);
 
         Label lblFilters = new Label { Text = "Фильтры:", Location = new Point(15, 62), AutoSize = true, Font = new Font("Segoe UI", 9, FontStyle.Bold) };
@@ -254,7 +263,7 @@ public class MainForm : Form
                             byte[]? imageBytes = null;
                             try
                             {
-                                Invoke(new Action(() => LogToUi("Создаю уникальную нейроиллюстрацию в DALL-E 3...")));
+                                Invoke(new Action(() => LogToUi("Создаю уникальную нейроиллюстрацию в Stable Diffusion...")));
                                 string base64Image = await _aiService.GenerateImageAsync(task.Topic);
 
                                 if (!string.IsNullOrEmpty(base64Image))
@@ -279,21 +288,38 @@ public class MainForm : Form
                                 Invoke(new Action(() => LogToUi("⚠️ Сбой обработки картинки (пропускаю): " + imgEx.Message)));
                             }
 
-                            Invoke(new Action(() => LogToUi("Передаю статью конвейеру публикации для платформы: " + task.SiteId)));
+                            Invoke(new Action(() => LogToUi("🚀 [Веерный конвейер] Запускаю одновременную публикацию на все платформы...")));
 
-                            IPublisherService currentPublisher = task.SiteId.StartsWith("vk")
-                                ? _vkPublisherService
-                                : _wpPublisherService;
+                            // 1. Отправляем статью на WordPress сайт
+                            bool isWpPublished = false;
+                            try
+                            {
+                                Invoke(new Action(() => LogToUi("🌐 [Сайт] Публикую статью на tech-info.mistmare.ru...")));
+                                isWpPublished = await _wpPublisherService.PublishAsync(task.Topic, articleHtml, task.Category, task.SiteId, imageBytes);
+                            }
+                            catch (Exception wpEx)
+                            {
+                                Invoke(new Action(() => LogToUi("⚠️ Ошибка публикации на сайт: " + wpEx.Message)));
+                            }
 
-                            // 4. Публикация статьи вместе с массивом байт картинки
-                            bool isPublished = await currentPublisher.PublishAsync(task.Topic, articleHtml, task.Category, task.SiteId, imageBytes);
+                            // 2. Параллельно отправляем эту же статью во ВКонтакте (лонгрид)
+                            bool isVkPublished = false;
+                            try
+                            {
+                                Invoke(new Action(() => LogToUi("📱 [ВКонтакте] Публикую статью в сообщество ВК...")));
+                                isVkPublished = await _vkPublisherService.PublishAsync(task.Topic, articleHtml, task.Category, task.SiteId, imageBytes);
+                            }
+                            catch (Exception vkEx)
+                            {
+                                Invoke(new Action(() => LogToUi("⚠️ Ошибка публикации в ВК: " + vkEx.Message)));
+                            }
 
+                            // Задача считается успешной, если контент закрепился хотя бы на одной из главных платформ
+                            task.Status = (isWpPublished || isVkPublished) ? Domain.Enums.TaskStatus.Published : Domain.Enums.TaskStatus.Failed;
 
-                            task.Status = isPublished ? Domain.Enums.TaskStatus.Published : Domain.Enums.TaskStatus.Failed;
-
-                            Invoke(new Action(() => LogToUi(isPublished
-                                ? "Статья успешно появилась в источнике!"
-                                : "Платформа отклонила запрос. Текст сохранен локально.")));
+                            Invoke(new Action(() => LogToUi(task.Status == Domain.Enums.TaskStatus.Published
+                                ? "✅ Контент-конвейер успешно завершил веерную публикацию!"
+                                : "❌ Все платформы отклонили запрос. Текст сохранен в локальный архив Postgres.")));
                         }
 
                         catch (Exception ex)
@@ -458,5 +484,17 @@ public class MainForm : Form
             LogToUi("⚠️ Ошибка при открытии окна просмотра: " + ex.Message);
         }
     }
+    private void BtnAddTask_Click(object? sender, EventArgs e)
+    {
+        using var addForm = new AddTaskForm();
+
+        // Если пользователь заполнил поля и нажал "Сохранить"
+        if (addForm.ShowDialog(this) == DialogResult.OK)
+        {
+            LogToUi("✏️ [Очередь] В базу данных вручную добавлена новая задача.");
+            RefreshGrid(); // Мгновенно обновляем интерактивную сетку на экране
+        }
+    }
+
 
 }
