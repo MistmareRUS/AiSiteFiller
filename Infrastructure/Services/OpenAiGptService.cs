@@ -135,30 +135,34 @@ public class OpenAiGptService : IAiService
 
     public async Task<string> GenerateImageAsync(string topic)
     {
-        _logger.LogInformation("[Локальный ИИ] Формирую промпт для RTX 4070 Super...");
+        _logger.LogInformation("[Локальный ИИ] Формирую промпт для вашей видеокарты...");
 
-        // Качественный промпт для Stable Diffusion XL
-        string localPrompt = "Photorealistic modern illustration for tech article: " + topic +
+        // Качественный промпт для Stable Diffusion XL / Juggernaut XL
+        string localPrompt = "Photorealistic modern illustration for technical article about " + topic +
                              ", studio lighting, commercial photography, highly detailed, 8k, no text, no words.";
 
-        // Формируем JSON-запрос под спецификацию API Automatic1111
         var requestBody = new
         {
             prompt = localPrompt,
-            negative_prompt = "text, words, low quality, bad hands, blurry, drawing, painting, cartoon",
-            steps = 25,          // Количество шагов прорисовки (25 идеальный баланс скорости и качества)
-            cfg_scale = 7,       // Насколько строго следовать тексту
-            width = 1024,        // Ширина картинки
-            height = 576,        // Идеальный горизонтальный размер 16:9 для обложек сайтов
+            negative_prompt = "text, words, low quality, bad hands, blurry, drawing, painting, cartoon, signs, labels",
+            steps = 20,          // 20 шагов — идеальный баланс скорости и качества на 4070 Super
+            cfg_scale = 7,
+            width = 1024,
+            height = 576,        // Формат 16:9 для обложек на вашем сайте
             sampler_name = "Euler a"
         };
 
-        string jsonString = JsonSerializer.Serialize(requestBody);
+        var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+        string jsonString = JsonSerializer.Serialize(requestBody, jsonOptions);
 
-        // Стучимся на локальный порт вашей запущенной нейросети
+        // Точный локальный URI вашего запущенного сервера Automatic1111
         string localSdUrl = "http://127.0.0";
 
-        using var localClient = new HttpClient();
+        // КРИТИЧЕСКИЙ ФИКС: Создаем полностью чистый, изолированный клиент для работы внутри ПК
+        var handler = new HttpClientHandler { UseDefaultCredentials = false, UseProxy = false };
+        using var localClient = new HttpClient(handler);
+        localClient.DefaultRequestHeaders.Clear();
+
         var request = new HttpRequestMessage(HttpMethod.Post, new Uri(localSdUrl));
 
         byte[] jsonBytes = Encoding.UTF8.GetBytes(jsonString);
@@ -168,25 +172,26 @@ public class OpenAiGptService : IAiService
 
         try
         {
-            _logger.LogInformation("[Локальный ИИ] Видеокарта RTX 4070 Super начала генерацию графики...");
+            _logger.LogInformation("[Локальный ИИ] Отправляю задачу на генерацию по адресу: " + localSdUrl);
+
+            // Отправляем пакет напрямую в вашу видеокарту в обход ProxyAPI
             HttpResponseMessage response = await localClient.SendAsync(request);
             string responseString = await response.Content.ReadAsStringAsync();
 
             if (response.IsSuccessStatusCode)
             {
-                // Парсим стандартный ответ Automatic1111
                 using var doc = JsonDocument.Parse(responseString);
                 var imagesArray = doc.RootElement.GetProperty("images");
 
                 if (imagesArray.GetArrayLength() > 0)
                 {
-                    _logger.LogInformation("✅ [Локальный ИИ] Картинка успешно сгенерирована на вашем ПК!");
-                    // Получаем чистый Base64-код первой сгенерированной картинки
+                    _logger.LogInformation("✅ [Локальный ИИ] Картинка успешно сгенерирована на GPU!");
+                    // Возвращаем чистый Base64 код первой картинки из массива
                     return imagesArray[0].GetString() ?? string.Empty;
                 }
             }
 
-            throw new Exception("Локальный SD API вернул ошибку: " + response.StatusCode);
+            throw new Exception("Локальный SD API вернул ошибку: " + response.StatusCode + ", Текст: " + responseString);
         }
         catch (Exception ex)
         {
