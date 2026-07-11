@@ -2,12 +2,15 @@
 using AiSiteFiller.Domain.Entities;
 using AiSiteFiller.Infrastructure.Data;
 using AiSiteFiller.Infrastructure.Services;
+using DnsClient.Internal;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System.ComponentModel;
 using System.Data;
+using ILoggerFactory = Microsoft.Extensions.Logging.ILoggerFactory;
 using Label = System.Windows.Forms.Label;
+using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 
 namespace AiSiteFiller;
 
@@ -26,6 +29,8 @@ public class MainForm : Form
 
     private CancellationTokenSource? _cts;
     private readonly IConfiguration _configuration;
+    private ILoggerFactory _loggerFactory = null!;
+
 
     // Инфраструктурные сервисы
     private IAiService _aiService = null!;
@@ -38,7 +43,11 @@ public class MainForm : Form
         _configuration = configuration;
         InitializeComponent();
         InitializeDependencies();
+
+        // Добавьте эту строчку, чтобы безопасно освобождать память СУБД и логов
+        this.FormClosed += (s, e) => _loggerFactory?.Dispose();
     }
+
 
     private void InitializeComponent()
     {
@@ -120,15 +129,15 @@ public class MainForm : Form
     private void InitializeDependencies()
     {
         // Создаем локальную изолированную фабрику логов для наших внутренних сервисов
-        using var loggerFactory = LoggerFactory.Create(builder =>
+        _loggerFactory = LoggerFactory.Create(builder =>
         {
             builder.AddFilter("AiSiteFiller", LogLevel.Debug);
         });
 
         // Инициализируем сервисы, передавая им строго изолированные логеры
-        _aiService = new OpenAiGptService(_configuration, loggerFactory.CreateLogger<OpenAiGptService>());
-        _wpPublisherService = new WordPressPublisherService(_configuration, loggerFactory.CreateLogger<WordPressPublisherService>());
-        _vkPublisherService = new VkPublisherService(_configuration, loggerFactory.CreateLogger<VkPublisherService>());
+        _aiService = new OpenAiGptService(_configuration, _loggerFactory.CreateLogger<OpenAiGptService>());
+        _wpPublisherService = new WordPressPublisherService(_configuration, _loggerFactory.CreateLogger<WordPressPublisherService>());
+        _vkPublisherService = new VkPublisherService(_configuration, _loggerFactory.CreateLogger<VkPublisherService>());
         _contentPlanner = new ContentPlannerService(_aiService);
 
         LogToUi("⚙️ Синхронизация структуры базы данных PostgreSQL через EF Core...");
@@ -242,41 +251,43 @@ public class MainForm : Form
                             Invoke(new Action(() => LogToUi("Статья #" + task.Id + " успешно заархивирована в локальный Postgres.")));
 
                             // 3. НОВЫЙ ЭТАП: Генерация уникальной графической обложки в DALL-E 3
-                            string generatedImageUrl = string.Empty;
+                            byte[]? imageBytes = null;
                             try
                             {
                                 Invoke(new Action(() => LogToUi("Создаю уникальную нейроиллюстрацию в DALL-E 3...")));
-                                generatedImageUrl = await _aiService.GenerateImageAsync(task.Topic);
+                                string base64Image = await _aiService.GenerateImageAsync(task.Topic);
+
+                                if (!string.IsNullOrEmpty(base64Image))
+                                {
+                                    // Переводим Base64 от ProxyAPI в массив байт
+                                    imageBytes = Convert.FromBase64String(base64Image);
+
+                                    // Инициализируем сервис MongoDB GridFS
+                                    IFileStorageService mongoStorage = new MongoDbStorageService(_configuration, _loggerFactory.CreateLogger<MongoDbStorageService>());
+
+                                    // СОХРАНЯЕМ В MONGO: отправляем бинарник в безопасный архив
+                                    string safeFileName = "cover_" + task.Id + ".jpg";
+                                    string mongoId = await mongoStorage.SaveFileAsync(imageBytes, safeFileName, "image/jpeg");
+
+                                    task.MongoImageId = mongoId;
+                                    await db.SaveChangesAsync(token);
+                                    Invoke(new Action(() => LogToUi("💾 [Медиа-Архив] Обложка сохранена в безопасное GridFS-хранилище MongoDB.")));
+                                }
                             }
                             catch (Exception imgEx)
                             {
-                                Invoke(new Action(() => LogToUi("⚠️ Сбой генерации картинки (пропускаю): " + imgEx.Message)));
+                                Invoke(new Action(() => LogToUi("⚠️ Сбой обработки картинки (пропускаю): " + imgEx.Message)));
                             }
 
                             Invoke(new Action(() => LogToUi("Передаю статью конвейеру публикации для платформы: " + task.SiteId)));
 
-                            IPublisherService currentPublisher;
+                            IPublisherService currentPublisher = task.SiteId.StartsWith("vk")
+                                ? _vkPublisherService
+                                : _wpPublisherService;
 
-                            switch (task.SiteId.ToLower().Trim())
-                            {
-                                case "vk-group":
-                                case "vk-page":
-                                    currentPublisher = _vkPublisherService;
-                                    break;
+                            // 4. Публикация статьи вместе с массивом байт картинки
+                            bool isPublished = await currentPublisher.PublishAsync(task.Topic, articleHtml, task.Category, task.SiteId, imageBytes);
 
-                                // Сюда в будущем в один клик добавятся новые каналы:
-                                // case "telegram-channel":
-                                //     currentPublisher = _tgPublisherService;
-                                //     break;
-
-                                // Все остальные варианты по умолчанию отправляем на WordPress сайты
-                                default:
-                                    currentPublisher = _wpPublisherService;
-                                    break;
-                            }
-
-                            // 4. Публикация статьи вместе со ссылкой на сгенерированную картинку
-                            bool isPublished = await currentPublisher.PublishAsync(task.Topic, articleHtml, task.Category, task.SiteId, generatedImageUrl);
 
                             task.Status = isPublished ? Domain.Enums.TaskStatus.Published : Domain.Enums.TaskStatus.Failed;
 
@@ -284,6 +295,7 @@ public class MainForm : Form
                                 ? "Статья успешно появилась в источнике!"
                                 : "Платформа отклонила запрос. Текст сохранен локально.")));
                         }
+
                         catch (Exception ex)
                         {
                             Invoke(new Action(() => LogToUi("Критическая ошибка: " + ex.Message)));

@@ -20,7 +20,7 @@ public class WordPressPublisherService : IPublisherService
         _logger = logger;
     }
 
-    public async Task<bool> PublishAsync(string title, string contentHtml, string category, string siteId, string imageUrl)
+    public async Task<bool> PublishAsync(string title, string contentHtml, string category, string siteId, byte[]? imageBytes)
     {
         _logger.LogInformation("[WordPress] Поиск конфигурации для сайта: " + siteId);
 
@@ -48,15 +48,14 @@ public class WordPressPublisherService : IPublisherService
         string rawCredentials = cleanUsername + ":" + cleanPassword;
         string authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes(rawCredentials));
 
-        // ПЕРВЫЙ ЭТАП: Если ИИ выдал картинку, скачиваем её и загружаем на хостинг Beget
         int? featuredMediaId = null;
 
-        if (!string.IsNullOrEmpty(imageUrl))
+        // Если байты картинки переданы, выгружаем их на хостинг Beget
+        if (imageBytes != null && imageBytes.Length > 0)
         {
-            featuredMediaId = await UploadMediaToWordPressAsync(httpClient, authToken, imageUrl, title);
+            featuredMediaId = await UploadMediaBytesToWordPressAsync(httpClient, authToken, imageBytes, title);
         }
 
-        // ВТОРОЙ ЭТАП: Публикация самой текстовой статьи на сайт
         var wpId = Domain.Constants.AppCategories.GetWordPressId(category);
 
         var postData = new WordPressPostRequest
@@ -65,7 +64,6 @@ public class WordPressPublisherService : IPublisherService
             Content = contentHtml,
             Status = "publish",
             Categories = wpId.HasValue ? new int[] { wpId.Value } : Array.Empty<int>(),
-            // Привязываем загруженную картинку как обложку (если загрузка прошла успешно)
             FeaturedMedia = featuredMediaId ?? 0
         };
 
@@ -82,14 +80,7 @@ public class WordPressPublisherService : IPublisherService
         try
         {
             HttpResponseMessage response = await httpClient.SendAsync(request);
-            if (response.IsSuccessStatusCode)
-            {
-                return true;
-            }
-
-            string errorContent = await response.Content.ReadAsStringAsync();
-            _logger.LogError("❌ Сервер отклонил пост. Код: " + response.StatusCode + ", Ошибка: " + errorContent);
-            return false;
+            return response.IsSuccessStatusCode;
         }
         catch (Exception ex)
         {
@@ -98,19 +89,12 @@ public class WordPressPublisherService : IPublisherService
         }
     }
 
-    private async Task<int?> UploadMediaToWordPressAsync(HttpClient siteClient, string authToken, string imageUrl, string title)
+    private async Task<int?> UploadMediaBytesToWordPressAsync(HttpClient siteClient, string authToken, byte[] imageBytes, string title)
     {
-        _logger.LogInformation("[WordPress] Скачиваю картинку из облака ИИ в память ПК...");
+        _logger.LogInformation("[WordPress] Загружаю готовые байты обложки на хостинг Beget...");
 
         try
         {
-            // Скачиваем бинарный файл картинки из DALL-E/Flux
-            using var downloadClient = new HttpClient();
-            byte[] imageBytes = await downloadClient.GetByteArrayAsync(imageUrl);
-
-            _logger.LogInformation("[WordPress] Загружаю медиафайл на хостинг Beget...");
-
-            // Формируем пакет multipart/form-data для передачи файла на движок сайта
             var request = new HttpRequestMessage(HttpMethod.Post, "/wp-json/wp/v2/media");
             request.Headers.TryAddWithoutValidation("Authorization", "Basic " + authToken);
 
@@ -118,9 +102,8 @@ public class WordPressPublisherService : IPublisherService
             var imageContent = new ByteArrayContent(imageBytes);
             imageContent.Headers.ContentType = new MediaTypeHeaderValue("image/jpeg");
 
-            // Генерация безопасного латинского имени файла на основе темы
             string safeFileName = "cover_" + Guid.NewGuid().ToString().Substring(0, 8) + ".jpg";
-            multipartContent.Add(imageContent, "file", safeFileName); // Поле обязательно должно называться "file"
+            multipartContent.Add(imageContent, "file", safeFileName);
             request.Content = multipartContent;
 
             HttpResponseMessage response = await siteClient.SendAsync(request);
@@ -129,21 +112,17 @@ public class WordPressPublisherService : IPublisherService
             {
                 string jsonResponse = await response.Content.ReadAsStringAsync();
                 var mediaResult = JsonSerializer.Deserialize<WordPressMediaResponse>(jsonResponse);
-
                 if (mediaResult != null && mediaResult.Id > 0)
                 {
-                    _logger.LogInformation("✅ Обложка загружена в медиабиблиотеку сайта. ID: " + mediaResult.Id);
+                    _logger.LogInformation("✅ Обложка успешно синхронизирована с медиабиблиотекой сайта. ID: " + mediaResult.Id);
                     return mediaResult.Id;
                 }
             }
-
-            string errorLog = await response.Content.ReadAsStringAsync();
-            _logger.LogWarning("⚠️ Не удалось загрузить картинку на сайт. Ответ сервера: " + errorLog);
             return null;
         }
         catch (Exception ex)
         {
-            _logger.LogWarning("⚠️ Сбой при обработке медиафайла обложки: " + ex.Message);
+            _logger.LogWarning("⚠️ Сбой при выгрузке медиабайтов: " + ex.Message);
             return null;
         }
     }

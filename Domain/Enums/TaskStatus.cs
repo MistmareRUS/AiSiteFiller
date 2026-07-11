@@ -2,6 +2,7 @@
 
 public enum TaskStatus
 {
+    Paused,
     Pending,
     Processing,
     Published,

@@ -26,7 +26,7 @@ public class VkPublisherService : IPublisherService
         };
     }
 
-    public async Task<bool> PublishAsync(string title, string contentHtml, string metadata, string siteId, string imageUrl)
+    public async Task<bool> PublishAsync(string title, string contentHtml, string metadata, string siteId, byte[]? imageBytes)
     {
         _logger.LogInformation("[VK] Начинаю подготовку публикации статьи в сообщество...");
 

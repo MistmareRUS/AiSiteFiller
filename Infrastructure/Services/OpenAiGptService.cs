@@ -65,7 +65,7 @@ public class OpenAiGptService : IAiService
 
         string prompt = $@"
             Напиши подробную, экспертную SEO-оптимизированную статью на тему: ""{topic}"".
-            Используй реалии текущего { DateTime.Now.Year } года.
+            Используй реалии текущего {DateTime.Now.Year} года.
 
             Требования к тексту и оформлению:
             1. Напиши статью в формате HTML (используй теги <h2>, <h3>, <p>, <ul>, <li>, <strong>). Не используй обертки ```html или теги <html>, <head>, <body>.
@@ -172,11 +172,11 @@ public class OpenAiGptService : IAiService
                 string responseString = await response.Content.ReadAsStringAsync();
                 var result = JsonSerializer.Deserialize<OpenAiImageResponse>(responseString);
 
-                if (result?.Data != null && result.Data.Length > 0)
+                if (result?.Data != null && result.Data.Length > 0 && !string.IsNullOrEmpty(result.Data[0].B64Json))
                 {
-                    string imageUrl = result.Data[0].Url;
-                    _logger.LogInformation("[ИИ] Картинка успешно сгенерирована нейросетью.");
-                    return imageUrl;
+                    _logger.LogInformation("[ИИ] Картинка успешно получена в формате Base64.");
+                    // Возвращаем готовую Base64 строку вместо ссылки
+                    return result.Data[0].B64Json;
                 }
             }
 
@@ -215,14 +215,15 @@ public class OpenAiGptService : IAiService
     }
 
     #region Вспомогательные DTO-классы для картинок
-
     private class OpenAiImageRequest
     {
-        [JsonPropertyName("model")] public string Model { get; set; } = "dall-e-3";
+        [JsonPropertyName("model")] public string Model { get; set; } = "openai/gpt-image-1.5";
+
         [JsonPropertyName("prompt")] public string Prompt { get; set; } = string.Empty;
         [JsonPropertyName("n")] public int N { get; set; } = 1;
         [JsonPropertyName("size")] public string Size { get; set; } = "1024x1024";
     }
+
 
     private class OpenAiImageResponse
     {
@@ -231,9 +232,10 @@ public class OpenAiGptService : IAiService
 
     private class ImageData
     {
-        [JsonPropertyName("url")] public string Url { get; set; } = string.Empty;
+        // Вместо [JsonPropertyName("url")]
+        [JsonPropertyName("b64_json")]
+        public string B64Json { get; set; } = string.Empty;
     }
-
     #endregion
 
 }
