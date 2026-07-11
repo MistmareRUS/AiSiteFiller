@@ -92,8 +92,13 @@ public class MainForm : Form
 
     private void InitializeDependencies()
     {
-        using var loggerFactory = LoggerFactory.Create(builder => { builder.AddConsole(); });
+        // Создаем локальную изолированную фабрику логов для наших внутренних сервисов
+        using var loggerFactory = LoggerFactory.Create(builder =>
+        {
+            builder.AddFilter("AiSiteFiller", LogLevel.Debug);
+        });
 
+        // Инициализируем сервисы, передавая им строго изолированные логеры
         _aiService = new OpenAiGptService(_configuration, loggerFactory.CreateLogger<OpenAiGptService>());
         _publisherService = new WordPressPublisherService(_configuration, loggerFactory.CreateLogger<WordPressPublisherService>());
         _contentPlanner = new ContentPlannerService(_aiService);
@@ -103,7 +108,6 @@ public class MainForm : Form
         try
         {
             using var db = new AppDbContext();
-            // Накатываем миграции автоматически при запуске "морды"
             db.Database.Migrate();
             LogToUi("✅ База данных успешно синхронизирована. Миграции проверены.");
         }
@@ -113,9 +117,8 @@ public class MainForm : Form
         }
 
         LogToUi("Система инициализирована. Ожидание запуска...");
-        RefreshGrid(); // Теперь этот вызов безопасен, так как миграция точно создала таблицу строчкой выше!
+        RefreshGrid();
     }
-
 
     private void BtnStart_Click(object? sender, EventArgs e)
     {

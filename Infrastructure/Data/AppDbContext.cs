@@ -10,11 +10,13 @@ public class AppDbContext : DbContext
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
-        // Строим конфигурацию из файла appsettings.json
+        // Загружаем базовую конфигурацию, а затем переопределяем её локальным файлом
         var configuration = new ConfigurationBuilder()
             .SetBasePath(Directory.GetCurrentDirectory())
             .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
+            .AddJsonFile("appsettings.local.json", optional: true, reloadOnChange: true)
             .Build();
+
 
         string? connectionString = configuration.GetConnectionString("PostgresConnection");
         optionsBuilder.UseNpgsql(connectionString);
