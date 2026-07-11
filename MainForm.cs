@@ -5,13 +5,7 @@ using AiSiteFiller.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using System;
-using System.Drawing;
-using System.Linq;
-using System.Reflection.Emit;
-using System.Threading;
-using System.Threading.Tasks;
-using System.Windows.Forms;
+using System.ComponentModel;
 using Label = System.Windows.Forms.Label;
 
 namespace AiSiteFiller;
@@ -23,6 +17,8 @@ public class MainForm : Form
     private Button _btnStart = null!;
     private Button _btnStop = null!;
     private Label _lblStatus = null!;
+    private Button _btnGeneratePlan = null!;
+
 
     private CancellationTokenSource? _cts;
     private readonly IConfiguration _configuration;
@@ -55,6 +51,12 @@ public class MainForm : Form
         _btnStop.Click += BtnStop_Click;
 
         _lblStatus = new Label { Text = "Статус: Робот остановлен", Location = new Point(340, 22), Size = new Size(300, 20), Font = new Font("Segoe UI", 10, FontStyle.Bold), ForeColor = Color.Gray };
+
+        _btnGeneratePlan = new Button { Text = "📝 СОЗДАТЬ ПЛАН (ИИ)", Location = new Point(340, 15), Size = new Size(160, 32), BackColor = Color.LightSkyBlue, Font = new Font("Segoe UI", 9, FontStyle.Bold) };
+        _btnGeneratePlan.Click += BtnGeneratePlan_Click;
+        topPanel.Controls.Add(_btnGeneratePlan);
+        _lblStatus = new Label { Text = "Статус: Робот остановлен", Location = new Point(520, 22), Size = new Size(350, 20), Font = new Font("Segoe UI", 10, FontStyle.Bold), ForeColor = Color.Gray };
+
 
         topPanel.Controls.Add(_btnStart);
         topPanel.Controls.Add(_btnStop);
@@ -256,13 +258,28 @@ public class MainForm : Form
         try
         {
             using var db = new AppDbContext();
-            // Подтягиваем последние 50 задач, чтобы не перегружать память
+
+            // Загружаем последние 100 задач из PostgreSQL
             var list = db.ArticlesQueue
                 .OrderByDescending(t => t.Id)
-                .Take(50)
+                .Take(100)
                 .ToList();
 
-            _taskGrid.DataSource = list;
+            // Магия WinForms: Оборачиваем список в BindingList, который поддерживает сортировку "из коробки"
+            var bindingList = new BindingList<ArticleTask>(list);
+            var bindingSource = new BindingSource(bindingList, null);
+
+            // Привязываем источник данных к сетке экрана
+            _taskGrid.DataSource = bindingSource;
+
+            // Включаем встроенную сортировку для каждой колонки
+            foreach (DataGridViewColumn column in _taskGrid.Columns)
+            {
+                column.SortMode = DataGridViewColumnSortMode.Automatic;
+            }
+
+            // Красивое визуальное оформление статусов (опционально)
+            _taskGrid.Invalidate();
         }
         catch (Exception ex)
         {
@@ -275,4 +292,35 @@ public class MainForm : Form
         if (_logTextBox.IsDisposed) return;
         _logTextBox.AppendText($"[{DateTime.Now:HH:mm:ss}] {message}{Environment.NewLine}");
     }
+
+    private async void BtnGeneratePlan_Click(object? sender, EventArgs e)
+    {
+        _btnGeneratePlan.Enabled = false;
+        LogToUi("🔮 [Планировщик] Запускаю массовый сбор SEO-тем через ИИ для всех рубрик...");
+
+        try
+        {
+            // Запускаем сбор пачками по 5 штук для каждой нашей рубрики констант
+            int count1 = await _contentPlanner.PopulateQueueWithTrendingTopicsAsync(Domain.Constants.AppCategories.SmartHome, 5);
+            LogToUi($"[Планировщик] Добавлено {count1} тем в рубрику Умный Дом.");
+
+            int count2 = await _contentPlanner.PopulateQueueWithTrendingTopicsAsync(Domain.Constants.AppCategories.Smartphones, 5);
+            LogToUi($"[Планировщик] Добавлено {count2} тем в рубрику Смартфоны.");
+
+            int count3 = await _contentPlanner.PopulateQueueWithTrendingTopicsAsync(Domain.Constants.AppCategories.Gadgets, 5);
+            LogToUi($"[Планировщик] Добавлено {count3} тем в рубрику Гаджеты.");
+
+            LogToUi("🚀 [Планировщик] Контент-план успешно создан! База данных PostgreSQL заполнена.");
+            RefreshGrid(); // Перерисовываем таблицу на экране, чтобы увидеть новые задачи
+        }
+        catch (Exception ex)
+        {
+            LogToUi($"❌ Ошибка планирования: {ex.Message}");
+        }
+        finally
+        {
+            _btnGeneratePlan.Enabled = true;
+        }
+    }
+
 }

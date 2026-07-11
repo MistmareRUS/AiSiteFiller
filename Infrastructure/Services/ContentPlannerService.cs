@@ -1,6 +1,7 @@
 ﻿using AiSiteFiller.Application.Interfaces;
 using AiSiteFiller.Domain.Entities;
 using AiSiteFiller.Infrastructure.Data;
+using System.Text.RegularExpressions;
 using TaskStatus = AiSiteFiller.Domain.Enums.TaskStatus;
 
 namespace AiSiteFiller.Infrastructure.Services;
@@ -9,7 +10,6 @@ public class ContentPlannerService : IContentPlannerService
 {
     private readonly IAiService _aiService;
 
-    // Используем Dependency Injection: для планирования тем нам нужен рабочий сервис ИИ
     public ContentPlannerService(IAiService aiService)
     {
         _aiService = aiService;
@@ -17,58 +17,63 @@ public class ContentPlannerService : IContentPlannerService
 
     public async Task<int> PopulateQueueWithTrendingTopicsAsync(string categoryCode, int count)
     {
-        Console.WriteLine($"\n📦 [ПЛАНИРОВЩИК] Запрашиваю у ИИ {count} горячих SEO-тем для категории: '{categoryCode}'...");
-
-        // Формируем строгий промпт, чтобы ИИ вернул темы строго в формате простого текстового списка
+        // Строгий промпт для сбора семантического ядра в ASCII-безопасном режиме
         string prompt = $@"
-        Ты эксперт по SEO и анализу поисковых запросов в Яндексе в сфере гаджетов и электроники.
-        Придумай ровно {count} уникальных, высокочастотных и актуальных названий статей для сайта в 2026 году.
-        Категория сайта: '{categoryCode}'.
+        Ты ведущий SEO-специалист и аналитик поисковых запросов в Яндексе и Google.
+        Придумай ровно {count} уникальных, высокочастотных и самых запрашиваемых названий статей для контентного сайта в {DateTime.Now.Year} году.
+        Тематика (категория сайта): '{categoryCode}'.
         
-        Правила для тем:
-        - Формат заголовков: Рейтинги (Топ-10...), Инструкции (Как настроить...), Сравнения (Что лучше...), Честные обзоры перед покупкой.
-        - Темы должны быть конкретными (с указанием популярных брендов, моделей техники и ценовых сегментов).
-        - Ответ верни СТРОГО в виде списка, где каждая тема на новой строчке. Не используй цифры, точки, маркеры дефисов или кавычки. Просто текст тем.";
+        Формат заголовков:
+        - Рейтинги (например: Топ-10 лучших роботов-пылесосов до 40 тысяч рублей...)
+        - Сравнения (например: Что лучше купить: iPhone 16 или Samsung S25...)
+        - Подробные инструкции (например: Как правильно настроить умный дом Яндекс...)
+        
+        Требования к ответу:
+        Верни ответ СТРОГО в виде простого текстового списка. Каждая тема должна быть на новой строчке. 
+        НЕ используй цифры, точки, дефисы, маркеры списков или кавычки. Просто голый текст тем без лишних приветствий и пояснений.";
 
         try
         {
-            // Используем наш существующий OpenAiGptService для генерации списка тем
             string rawTopicsList = await _aiService.GenerateArticleAsync(prompt);
 
-            // Разбиваем полученный текст на строчки и очищаем от пустых элементов
+            // Разрезаем текст на строчки, очищаем от мусора и ЖЕСТКО ВЫРЕЗАЕМ ЛЮБОЙ HTML
             string[] topics = rawTopicsList
                 .Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries)
                 .Select(t => t.Trim())
-                .Where(t => t.Length > 10) // Отсекаем слишком короткий мусор
+                // 1. Вырезаем любые HTML теги (например, <p>, <h2>, </h3>) с помощью регулярного выражения
+                .Select(t => Regex.Replace(t, @"<[^>]*>", ""))
+                // 2. Убираем случайные маркеры списков и кавычки на концах
+                .Select(t => Regex.Replace(t, @"^[0-9\-\.\*\s]+", ""))
+                .Select(t => t.Trim('"', ' ', '\''))
+                .Where(t => t.Length > 15)
                 .Take(count)
                 .ToArray();
 
             if (topics.Length == 0)
             {
-                Console.WriteLine("⚠️ [ПЛАНИРОВЩИК] ИИ вернул пустой список или неверный формат.");
                 return 0;
             }
 
-            // Записываем новые темы в PostgreSQL через EF Core
             using var db = new AppDbContext();
 
+            // Формируем пачку задач для PostgreSQL
             var newTasks = topics.Select(topic => new ArticleTask
             {
                 Topic = topic,
                 Category = categoryCode,
-                Status = TaskStatus.Pending, // Новые темы сразу встают в фоновую очередь
+                SiteId = "tech-info", // Жестко привязываем к нашему первому сайту
+                Status = TaskStatus.Pending, // Задачи сразу встают в активную очередь
                 CreatedAt = DateTime.UtcNow
             }).ToList();
 
             await db.ArticlesQueue.AddRangeAsync(newTasks);
             await db.SaveChangesAsync();
 
-            Console.WriteLine($"✅ [ПЛАНИРОВЩИК] База данных успешно пополнена! Добавлено {newTasks.Count} новых фоновых задач.");
             return newTasks.Count;
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            Console.WriteLine($"❌ [ПЛАНИРОВЩИК] Ошибка при планировании контента: {ex.Message}");
+            // Ошибка логируется на уровне ИИ-сервиса
             return 0;
         }
     }
