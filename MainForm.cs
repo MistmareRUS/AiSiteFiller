@@ -149,15 +149,39 @@ public class MainForm : Form
         {
             using (var db = new AppDbContext())
             {
-                // База уже мигрирована при старте, проверяем только наличие задач
+                Invoke(() => LogToUi("⚙️ Синхронизация структуры базы данных PostgreSQL через EF Core..."));
+                await db.Database.MigrateAsync(token);
+
+                // Автоматический сброс упавших задач обратно в очередь (только для режима отладки)
+#if DEBUG
+                Invoke(() => LogToUi("[DEBUG] Автоматический сброс задач из статуса Failed в Pending..."));
+                var failedTasks = await db.ArticlesQueue
+                    .Where(t => t.Status == Domain.Enums.TaskStatus.Failed)
+                    .ToListAsync(token);
+
+                if (failedTasks.Any())
+                {
+                    foreach (var failedTask in failedTasks)
+                    {
+                        failedTask.Status = Domain.Enums.TaskStatus.Pending;
+                    }
+                    await db.SaveChangesAsync(token);
+                    Invoke(() => LogToUi($"[DEBUG] Успешно возвращено в очередь задач: {failedTasks.Count} шт."));
+                }
+#endif
+
+                Invoke(RefreshGrid);
+
                 if (!await db.ArticlesQueue.AnyAsync(token))
                 {
-                    Invoke(() => LogToUi("📦 Очередь пуста. ИИ планирует стартовые темы..."));
+                    Invoke(() => LogToUi("Queue is empty. AI is planning starting topics..."));
                     await _contentPlanner.PopulateQueueWithTrendingTopicsAsync(Domain.Constants.AppCategories.SmartHome, 3);
                     await _contentPlanner.PopulateQueueWithTrendingTopicsAsync(Domain.Constants.AppCategories.Smartphones, 3);
                     Invoke(RefreshGrid);
                 }
             }
+
+
 
             while (!token.IsCancellationRequested)
             {
@@ -197,7 +221,9 @@ public class MainForm : Form
                         }
                         catch (Exception ex)
                         {
+                            // Выводим не только сообщение, но и StackTrace, чтобы понять, какой метод вызвал ошибку
                             Invoke(() => LogToUi($"❌ Критическая ошибка: {ex.Message}"));
+                            Invoke(() => LogToUi($"🔍 Стек ошибки: {ex.StackTrace}"));
                             task.Status = Domain.Enums.TaskStatus.Failed;
                         }
 

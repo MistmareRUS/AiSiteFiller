@@ -15,6 +15,7 @@ public class OpenAiGptService : IAiService
 {
     private readonly HttpClient _httpClient;
     private readonly ILogger<OpenAiGptService> _logger;
+    private readonly string _apiKey;
 
     public OpenAiGptService(IConfiguration configuration, ILogger<OpenAiGptService> logger)
     {
@@ -29,22 +30,29 @@ public class OpenAiGptService : IAiService
             throw new ArgumentNullException(nameof(apiKey));
         }
 
+        _apiKey = apiKey.Trim();
+
         if (string.IsNullOrEmpty(baseUrl))
         {
             baseUrl = "https://openai.com";
         }
 
-        _httpClient = new HttpClient
+        // Изолируем HttpClient от системных прокси Windows (чтобы VPN не портил заголовки)
+        var handler = new HttpClientHandler
         {
-            BaseAddress = new Uri(baseUrl)
+            UseDefaultCredentials = false,
+            UseProxy = false
         };
 
-        _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        _httpClient = new HttpClient(handler)
+        {
+            BaseAddress = new Uri(baseUrl.Trim())
+        };
     }
 
     public async Task<string> GenerateArticleAsync(string topic)
     {
-        _logger.LogInformation("🤖 Отправляю запрос к ИИ на генерацию статьи по теме: \"{Topic}\"...", topic);
+        _logger.LogInformation("🤖 [ИИ] Формирую ТЗ для статьи: \"{Topic}\"...", topic);
 
         string prompt = $@"
         Напиши подробную, экспертную SEO-оптимизированную статью на тему: ""{topic}"".
@@ -70,28 +78,39 @@ public class OpenAiGptService : IAiService
 
         var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
         string jsonString = JsonSerializer.Serialize(requestBody, jsonOptions);
-        var content = new StringContent(jsonString, Encoding.UTF8, "application/json");
+
+        // СБОРКА НИЗКОУРОВНЕВОГО ЗАПРОСА: Исключаем StringContent
+        var request = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions");
+
+        request.Headers.Clear();
+        request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {_apiKey}");
+        request.Headers.TryAddWithoutValidation("Connection", "close");
+
+        // Передаем строго чистые UTF-8 байты, изолируя заголовки от кириллицы в теле
+        byte[] jsonBytes = Encoding.UTF8.GetBytes(jsonString);
+        var content = new ByteArrayContent(jsonBytes);
+        content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
+        request.Content = content;
 
         try
         {
-            HttpResponseMessage response = await _httpClient.PostAsync("/v1/chat/completions", content);
+            // Отправляем изолированный запрос
+            HttpResponseMessage response = await _httpClient.SendAsync(request);
 
             if (response.IsSuccessStatusCode)
             {
                 string responseString = await response.Content.ReadAsStringAsync();
                 var result = JsonSerializer.Deserialize<OpenAiChatResponse>(responseString, jsonOptions);
-                string? generatedText = result?.Choices?[0].Message?.Content;
+                string? generatedText = result?.Choices?.Length > 0 ? result.Choices[0].Message?.Content : null;
 
                 if (!string.IsNullOrEmpty(generatedText))
                 {
-                    _logger.LogInformation("✅ ИИ успешно сгенерировал текст статьи для темы: \"{Topic}\"", topic);
                     return generatedText;
                 }
             }
 
             string errorBody = await response.Content.ReadAsStringAsync();
-            _logger.LogError("❌ Ошибка ответа OpenAI API. Статус: {Status}, Тело: {Error}", response.StatusCode, errorBody);
-            throw new Exception($"OpenAI API вернул ошибку ({response.StatusCode})");
+            throw new Exception($"OpenAI API вернул ошибку ({response.StatusCode}): {errorBody}");
         }
         catch (Exception ex)
         {
@@ -117,7 +136,7 @@ public class OpenAiGptService : IAiService
 
     private class OpenAiChatResponse
     {
-        [JsonPropertyName("choices")] public Choice[]? Choices { get; set; }
+        [JsonPropertyName("choices")] public Choice[] Choices { get; set; } = Array.Empty<Choice>();
     }
 
     private class Choice

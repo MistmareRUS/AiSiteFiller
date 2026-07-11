@@ -36,8 +36,13 @@ public class WordPressPublisherService : IPublisherService
             cleanUrl = "http://" + cleanUrl;
         }
 
-        // Чистый хендлер, игнорирующий региональные системные креды Windows
-        var handler = new HttpClientHandler { UseDefaultCredentials = false };
+        // КРИТИЧЕСКИЙ МОМЕНТ: Отключаем использование системного прокси Windows
+        var handler = new HttpClientHandler
+        {
+            UseDefaultCredentials = false,
+            UseProxy = false // ◄── Полностью игнорируем переменные окружения VPN/Прокси вашей Windows
+        };
+
         _httpClient = new HttpClient(handler)
         {
             BaseAddress = new Uri(cleanUrl)
