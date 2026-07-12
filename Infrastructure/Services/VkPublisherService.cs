@@ -64,11 +64,11 @@ public class VkPublisherService : IPublisherService
                                 "?v=5.131" +
                                 "&access_token=" + cleanToken;
 
-            // ЖЕЛЕЗНЫЙ ФИКС: Собираем параметры в ручную строку контента
-            string postDataBody = "owner_id=-" + cleanGroup +
-                                  "&from_group=1" +
-                                  "&signed=0" +
+            // Передаем ТОЛЬКО owner_id и message. 
+            // Для токена самой группы этого более чем достаточно, чтобы выпустить пост от имени паблика
+            string postDataBody = "owner_id=-" + cleanGroup.Replace("-", "").Trim() +
                                   "&message=" + Uri.EscapeDataString(finalPostText);
+
 
             var handler = new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false };
             using var isolatedClient = new HttpClient(handler);
@@ -89,32 +89,6 @@ public class VkPublisherService : IPublisherService
 
             // Срезаем BOM-маркеры ВК
             wallResultString = wallResultString.Trim(new char[] { '\uFEFF', '\u200B', ' ', '\n', '\r', '\t' });
-#if DEBUG
-            // Если ответ начинается как веб-страница, вытаскиваем из неё человеческий текст ошибки
-            //if (wallResultString.StartsWith("<"))
-            //{
-            //    string cleanHtmlError = "Неизвестная ошибка шлюза веб-сервера.";
-            //    try
-            //    {
-            //        // Вытаскиваем содержимое между тегами <body> и </body>
-            //        var match = System.Text.RegularExpressions.Regex.Match(wallResultString, @"<body[^>]*>(.*?)</body>", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Singleline);
-            //        if (match.Success)
-            //        {
-            //            // Очищаем внутренности от лишних HTML-тегов для красивого вывода в MessageBox
-            //            cleanHtmlError = System.Text.RegularExpressions.Regex.Replace(match.Groups[1].Value, @"<[^>]*>", "").Trim();
-            //        }
-            //        else
-            //        {
-            //            // Если тега body нет, берем первые 200 символов страницы
-            //            cleanHtmlError = System.Text.RegularExpressions.Regex.Replace(wallResultString, @"<[^>]*>", "").Trim();
-            //            if (cleanHtmlError.Length > 200) cleanHtmlError = cleanHtmlError.Substring(0, 200) + "...";
-            //        }
-            //    }
-            //    catch { }
-
-            //    throw new Exception($"[Сетевой сбой ВК].\nСервер вернул ошибку веб-узла:\n\n👉 {cleanHtmlError}");
-            //}
-#endif
 
             // Оставляем дамп-лог для истории
             string debugFilePath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "vk_error_page.html");
