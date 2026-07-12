@@ -8,6 +8,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System.ComponentModel;
 using System.Data;
+using System.Drawing.Printing;
 using ILoggerFactory = Microsoft.Extensions.Logging.ILoggerFactory;
 using Label = System.Windows.Forms.Label;
 using LogLevel = Microsoft.Extensions.Logging.LogLevel;
@@ -17,6 +18,13 @@ namespace AiSiteFiller;
 public class MainForm : Form
 {
     private DataGridView _taskGrid = null!;
+
+    // Элементы управления для постраничного вывода
+    private int _currentPage = 1;       // Текущая страница (начиная с 1)
+    private const int _pageSize = 10;    // Строго по 10 статей на страницу
+    private int _totalPages = 1;        // Общее количество страниц в базе
+
+
     private TextBox _logTextBox = null!;
     private Button _btnStart = null!;
     private Button _btnStop = null!;
@@ -135,6 +143,7 @@ public class MainForm : Form
             Font = new Font("Consolas", 9.5f)
         };
 
+
         // Настройка таблицы детализации подзадач веера
         dgvDetails = new DataGridView
         {
@@ -152,7 +161,53 @@ public class MainForm : Form
 
         _taskGrid.SelectionChanged += DgvTasks_SelectionChanged;
 
+        // Создание кнопок и метки пагинации (под левым гридом)
+        // Кнопка "Назад"
+        Button btnPrevPage = new Button
+        {
+            Text = "◀",
+            Location = new Point(20, 345), // Строго под левым нижним углом _taskGrid
+            Size = new Size(40, 25),
+            BackColor = Color.LightGray
+        };
+        btnPrevPage.Click += async (s, e) =>
+        {
+            if (_currentPage > 1)
+            {
+                _currentPage--;
+                await RefreshGridAsync();
+            }
+        };
+
+        // Метка текущей страницы
+        Label lblPageInfo = new Label
+        {
+            Name = "lblPageInfo",
+            Text = "Страница: 1 из 1",
+            Location = new Point(70, 349),
+            Size = new Size(150, 20),
+            Font = new Font("Segoe UI", 9, FontStyle.Bold)
+        };
+
+        // Кнопка "Вперед"
+        Button btnNextPage = new Button
+        {
+            Text = "▶",
+            Location = new Point(230, 345), // Чуть правее метки
+            Size = new Size(40, 25),
+            BackColor = Color.LightGray
+        };
+        btnNextPage.Click += async (s, e) =>
+        {
+            if (_currentPage < _totalPages)
+            {
+                _currentPage++;
+                await RefreshGridAsync();
+            }
+        };
+
         this.Controls.Add(_taskGrid);
+        this.Controls.AddRange(new Control[] { btnPrevPage, lblPageInfo, btnNextPage });
         this.Controls.Add(dgvDetails);
         this.Controls.Add(_logTextBox);
         this.Controls.Add(topPanel);
@@ -189,7 +244,7 @@ public class MainForm : Form
         }
 
         LogToUi("Система инициализирована. Ожидание запуска...");
-        RefreshGrid();
+        _ = RefreshGridAsync();
     }
 
     private void BtnStart_Click(object? sender, EventArgs e)
@@ -363,7 +418,7 @@ public class MainForm : Form
                     : $"❌ Подзадача #{pubTask.Id} [{pubTask.Platform}] провалена. Ошибка занесена в лог базы."));
 
                 // Обновляем визуальную сетку DataGridView
-                Invoke(RefreshGrid);
+                Invoke(async () => await RefreshGridAsync());
             }
             catch (Exception ex)
             {
@@ -372,41 +427,6 @@ public class MainForm : Form
 
             // Небольшая технологическая пауза перед следующей подзадачей
             await Task.Delay(5000, cancellationToken);
-        }
-    }
-
-
-    private async void RefreshGrid()
-    {
-        try
-        {
-            using var db = new AppDbContext();
-
-            // Загружаем только чистые метаданные статей, без привязки к статусам веера
-            var articles = await db.ArticlesQueue
-                .Select(a => new
-                {
-                    a.Id,
-                    Тема = a.Topic,
-                    Рубрика = a.Category,
-                    Сайт = a.SiteId,
-                    Создано = a.CreatedAt.ToLocalTime().ToString("dd.MM.yyyy HH:mm")
-                })
-                .OrderByDescending(a => a.Id)
-                .ToListAsync();
-
-            // Безопасно обновляем DataSource в главном потоке формы
-            this.BeginInvoke(new Action(() =>
-            {
-                _taskGrid.DataSource = articles;
-
-                // Триггерим обновление нижней панели для первой выделившейся строки
-                DgvTasks_SelectionChanged(null, EventArgs.Empty);
-            }));
-        }
-        catch (Exception ex)
-        {
-            this.BeginInvoke(new Action(() => LogToUi($"💥 Ошибка обновления таблицы статей: {ex.Message}")));
         }
     }
 
@@ -475,7 +495,7 @@ public class MainForm : Form
             LogToUi($"[Планировщик] Добавлено {count3} тем в рубрику Гаджеты.");
 
             LogToUi("🚀 [Планировщик] Контент-план успешно создан! База данных PostgreSQL заполнена.");
-            RefreshGrid(); // Перерисовываем таблицу на экране, чтобы увидеть новые задачи
+            await RefreshGridAsync();  // Перерисовываем таблицу на экране, чтобы увидеть новые задачи
         }
         catch (Exception ex)
         {
@@ -507,14 +527,14 @@ public class MainForm : Form
             LogToUi("⚠️ Ошибка при открытии окна просмотра: " + ex.Message);
         }
     }
-    private void BtnAddTask_Click(object sender, EventArgs e)
+    private async void BtnAddTask_Click(object sender, EventArgs e)
     {
         var platforms = _publishers.Select(p => p.PlatformName);
         using var addForm = new AddTaskForm(platforms);
         if (addForm.ShowDialog(this) == DialogResult.OK)
         {
             LogToUi("✏️ [Очередь] В базу данных вручную добавлена новая задача.");
-            RefreshGrid();
+            await RefreshGridAsync();
         }
     }
 
@@ -554,6 +574,58 @@ public class MainForm : Form
         {
             // Используем родное логирование формы
             LogToUi($"⚠️ Ошибка загрузки детализации веера: {ex.Message}");
+        }
+    }
+    private async Task RefreshGridAsync()
+    {
+        try
+        {
+            using var db = new AppDbContext();
+
+            // 1. Считаем общее количество записей в PostgreSQL для вычисления страниц
+            int totalItems = await db.ArticlesQueue.CountAsync();
+
+            // Вычисляем максимальное число страниц (минимум 1, если база пустая)
+            _totalPages = (int)Math.Ceiling((double)totalItems / _pageSize);
+            if (_totalPages < 1) _totalPages = 1;
+
+            // Страховка от вылета за границы
+            if (_currentPage > _totalPages) _currentPage = _totalPages;
+
+            // 2. Выкачиваем пачку строго для текущей страницы с помощью Skip и Take
+            var articles = await db.ArticlesQueue
+                .OrderByDescending(a => a.Id)
+                .Skip((_currentPage - 1) * _pageSize)
+                .Take(_pageSize)
+                .Select(a => new
+                {
+                    a.Id,
+                    Тема = a.Topic,
+                    Рубрика = a.Category,
+                    Сайт = a.SiteId,
+                    Создано = a.CreatedAt.ToLocalTime().ToString("dd.MM.yyyy HH:mm")
+                })
+                .ToListAsync();
+
+            // 3. Безопасно обновляем элементы управления в UI-потоке WinForms
+            this.BeginInvoke(new Action(() =>
+            {
+                // Заливаем данные в ваш реальный левый грид задач
+                _taskGrid.DataSource = articles;
+
+                // Находим добавленную метку и обновляем текст страниц
+                if (this.Controls.Find("lblPageInfo", true).FirstOrDefault() is Label pageLabel)
+                {
+                    pageLabel.Text = $"Страница: {_currentPage} из {_totalPages} (Всего: {totalItems})";
+                }
+
+                // Принудительно заставляем правую панель подзадач dgvDetails обновиться для первой строки пачки
+                DgvTasks_SelectionChanged(null, EventArgs.Empty);
+            }));
+        }
+        catch (Exception ex)
+        {
+            this.BeginInvoke(new Action(() => LogToUi($"💥 Ошибка асинхронного обновления таблицы: {ex.Message}")));
         }
     }
 
