@@ -59,30 +59,29 @@ public class VkPublisherService : IPublisherService
                                    "🚀 Читать полный обзор с подробными тестами на нашем сайте:\n" +
                                    "👉 https://mistmare.ru";
 
-            // В URI отправляем ТОЛЬКО токен и версию, защищая длину ссылки от раздувания и ошибки 414
+            // 1. В URI отправляем ТОЛЬКО токен и версию, чтобы ВК сразу авторизовал запрос
             string requestUri = "https://vk.com" +
                                 "?v=5.131" +
                                 "&access_token=" + cleanToken;
 
-            // Текст и идентификаторы пакуем в тело POST-запроса
-            string postDataBody = "owner_id=-" + cleanGroup +
-                                  "&from_group=1" +
-                                  "&message=" + Uri.EscapeDataString(finalPostText);
+            // 2. Все содержательные параметры упаковываем в тело POST-запроса
+            var postData = new System.Collections.Generic.Dictionary<string, string>
+        {
+            { "owner_id", "-" + cleanGroup }, // Минус перед ID обязателен для пабликов
+            { "from_group", "1" },           // Публикация от имени сообщества
+            { "message", finalPostText }      // Текст нашего сочного анонса
+        };
 
             var handler = new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false };
             using var isolatedClient = new HttpClient(handler);
             isolatedClient.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
 
-            // Передаем параметры через StringContent
-            var content = new StringContent(postDataBody, Encoding.UTF8, "application/x-www-form-urlencoded");
+            // Кодируем словарь параметров в стандартный формат x-www-form-urlencoded
+            var content = new FormUrlEncodedContent(postData);
 
-            // КРИТИЧЕСКИЙ ФИКС: Явное ContentLength намертво блокирует chunked-передачу .NET 8.0, 
-            // пробивая шлюзы защиты ВКонтакте
-            byte[] bodyBytes = Encoding.UTF8.GetBytes(postDataBody);
-            content.Headers.ContentLength = bodyBytes.Length;
+            // Отправляем полноценный POST-запрос с данными в теле
+            var wallResponse = await isolatedClient.PostAsync(requestUri, content);
 
-            var request = new HttpRequestMessage(HttpMethod.Post, new Uri(requestUri)) { Content = content };
-            var wallResponse = await isolatedClient.SendAsync(request);
 
             byte[] responseBytes = await wallResponse.Content.ReadAsByteArrayAsync();
             string wallResultString = Encoding.UTF8.GetString(responseBytes).Trim();
