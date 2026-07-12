@@ -126,7 +126,7 @@ public class MainForm : Form
             RowHeadersVisible = false,
             SelectionMode = DataGridViewSelectionMode.FullRowSelect,
             Location = new Point(20, 95),
-            Size = new Size(600, 370),
+            Size = new Size(600, 340),
             Anchor = AnchorStyles.Top | AnchorStyles.Left,
         };
         _taskGrid.CellDoubleClick += TaskGrid_CellDoubleClick;
@@ -166,7 +166,7 @@ public class MainForm : Form
         Button btnPrevPage = new Button
         {
             Text = "◀",
-            Location = new Point(20, 345), // Строго под левым нижним углом _taskGrid
+            Location = new Point(20, 440), // Строго под левым нижним углом _taskGrid
             Size = new Size(40, 25),
             BackColor = Color.LightGray
         };
@@ -184,8 +184,8 @@ public class MainForm : Form
         {
             Name = "lblPageInfo",
             Text = "Страница: 1 из 1",
-            Location = new Point(70, 349),
-            Size = new Size(150, 20),
+            Location = new Point(70, 444),
+            Size = new Size(250, 20),
             Font = new Font("Segoe UI", 9, FontStyle.Bold)
         };
 
@@ -193,7 +193,7 @@ public class MainForm : Form
         Button btnNextPage = new Button
         {
             Text = "▶",
-            Location = new Point(230, 345), // Чуть правее метки
+            Location = new Point(240, 440), // Чуть правее метки
             Size = new Size(40, 25),
             BackColor = Color.LightGray
         };
@@ -206,11 +206,17 @@ public class MainForm : Form
             }
         };
 
-        this.Controls.Add(_taskGrid);
-        this.Controls.AddRange(new Control[] { btnPrevPage, lblPageInfo, btnNextPage });
         this.Controls.Add(dgvDetails);
-        this.Controls.Add(_logTextBox);
+        this.Controls.Add(_taskGrid);
+        this.Controls.Add(btnPrevPage);
+        this.Controls.Add(lblPageInfo);
+        this.Controls.Add(btnNextPage);
+        this.Controls.Add(_logTextBox); // Добавляем лог-бокс ПОСЛЕ кнопок, чтобы Dock не ломал геометрию
         this.Controls.Add(topPanel);
+
+        btnPrevPage.BringToFront();
+        lblPageInfo.BringToFront();
+        btnNextPage.BringToFront();
     }
 
 
