@@ -68,13 +68,13 @@ public class VkPublisherService : IPublisherService
                                 "?v=5.131" +
                                 "&access_token=" + cleanToken;
 
-            // Данные сообщения. Для пабликов важенfrom_group=1
             var postData = new System.Collections.Generic.Dictionary<string, string>
-        {
-            { "owner_id", "-" + cleanGroup }, // Минус перед ID обязателен для стен сообществ
-            { "from_group", "1" },           // Публикация строго от имени сообщества
-            { "message", finalPostText }
-        };
+            {
+                { "owner_id", "-" + cleanGroup }, // ID паблика с минусом
+                { "message", finalPostText },     // Текст нашего сочного SEO-анонса
+                { "signed", "0" }                 // Железный фикс ошибки 15 для пабликов
+            };
+
 
             var handler = new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false };
             using var isolatedClient = new HttpClient(handler);
