@@ -34,18 +34,78 @@ public class VkPublisherService : IPublisherService
 
         try
         {
-            // 1. Форматируем HTML текст в красивый пост для соцсетей
-            string cleanText = contentHtml
+            // 1. УМНАЯ КОНВЕРТАЦИЯ HTML-ТАБЛИЦ В СТИЛЬНЫЙ СПИСОК ДЛЯ ВК
+            string textWithFormattedTables = contentHtml;
+
+            try
+            {
+                // Ищем таблицы в тексте статьи
+                var tableMatches = System.Text.RegularExpressions.Regex.Matches(textWithFormattedTables, @"<table[^>]*>(.*?)<\/table>", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Singleline);
+
+                foreach (System.Text.RegularExpressions.Match tableMatch in tableMatches)
+                {
+                    string tableHtml = tableMatch.Groups[1].Value;
+                    var rows = System.Text.RegularExpressions.Regex.Matches(tableHtml, @"<tr[^>]*>(.*?)<\/tr>", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Singleline);
+
+                    if (rows.Count > 1)
+                    {
+                        var sbTable = new StringBuilder();
+                        sbTable.AppendLine("\n📊 СРАВНИТЕЛЬНЫЕ ХАРАКТЕРИСТИКИ МОДЕЛЕЙ:");
+                        sbTable.AppendLine("───────────────────────────────────");
+
+                        // Парсим заголовки таблицы (первая строка tr)
+                        var headersMatches = System.Text.RegularExpressions.Regex.Matches(rows[0].Value, @"<th[^>]*>(.*?)<\/th>|<td[^>]*>(.*?)<\/td>", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Singleline);
+                        var headers = new System.Collections.Generic.List<string>();
+                        foreach (System.Text.RegularExpressions.Match hMatch in headersMatches)
+                        {
+                            string hText = System.Text.RegularExpressions.Regex.Replace(hMatch.Value, @"<[^>]*>", "").Trim();
+                            headers.Add(hText);
+                        }
+
+                        // Парсим строки с данными (начиная со второй строки)
+                        for (int i = 1; i < rows.Count; i++)
+                        {
+                            var cells = System.Text.RegularExpressions.Regex.Matches(rows[i].Value, @"<td[^>]*>(.*?)<\/td>", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Singleline);
+                            if (cells.Count > 0)
+                            {
+                                string modelName = System.Text.RegularExpressions.Regex.Replace(cells[0].Value, @"<[^>]*>", "").Trim();
+                                sbTable.AppendLine("🔹 " + modelName.ToUpper());
+
+                                // Выводим остальные характеристики со сдвигом
+                                for (int j = 1; j < cells.Count && j < headers.Count; j++)
+                                {
+                                    string cellValue = System.Text.RegularExpressions.Regex.Replace(cells[j].Value, @"<[^>]*>", "").Trim();
+                                    sbTable.AppendLine("  ▪️ " + headers[j] + ": " + cellValue);
+                                }
+                                sbTable.AppendLine(); // Разделитель между моделями
+                            }
+                        }
+                        sbTable.AppendLine("───────────────────────────────────");
+
+                        // Заменяем сырой HTML таблицы на наш красивый текстовый блок
+                        textWithFormattedTables = textWithFormattedTables.Replace(tableMatch.Value, sbTable.ToString());
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("[VK] Ошибка конвертации таблицы: " + ex.Message);
+            }
+
+            // 2. СТАНДАРТНАЯ ОЧИСТКА ОСТАЛЬНОГО HTML-ТЕКСТА
+            string cleanText = textWithFormattedTables
                 .Replace("<p>", "").Replace("</p>", "\n\n")
                 .Replace("<h2>", "🔥 ").Replace("</h2>", " \n")
                 .Replace("<h3>", "⚡ ").Replace("</h3>", " \n")
                 .Replace("<ul>", "").Replace("</ul>", "")
-                .Replace("<li>", "🔹 ").Replace("</li>", "\n")
+                .Replace("<li>", "🔸 ").Replace("</li>", "\n")
                 .Replace("strong", "").Replace("</strong>", "");
 
+            // Вырезаем все остаточные теги
             cleanText = System.Text.RegularExpressions.Regex.Replace(cleanText, @"<[^>]*>", "");
 
             string finalPostText = "📰 " + title.ToUpper() + "\n\n" + cleanText;
+
 
             string targetGroupId = cleanGroup.Replace("-", "").Trim();
             string attachmentsId = string.Empty;
