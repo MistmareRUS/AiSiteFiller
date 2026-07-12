@@ -110,7 +110,7 @@ public class MainForm : Form
 
         _taskGrid = new DataGridView
         {
-            Dock = DockStyle.Fill,
+            Dock = DockStyle.None,
             BackgroundColor = Color.White,
             AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
             ReadOnly = true,
@@ -118,7 +118,7 @@ public class MainForm : Form
             RowHeadersVisible = false,
             SelectionMode = DataGridViewSelectionMode.FullRowSelect,
             Location = new Point(20, 95),
-            Size = new Size(500, 240),
+            Size = new Size(600, 370),
             Anchor = AnchorStyles.Top | AnchorStyles.Left,
         };
         _taskGrid.CellDoubleClick += TaskGrid_CellDoubleClick;
@@ -138,8 +138,8 @@ public class MainForm : Form
         // Настройка таблицы детализации подзадач веера
         dgvDetails = new DataGridView
         {
-            Location = new Point(530, 95), // Аккуратно встает справа от _dgv с отступом 20px
-            Size = new Size(420, 240),     // Занимает всю правую часть экрана
+            Location = new Point(630, 95),
+            Size = new Size(390, 370),
             AllowUserToAddRows = false,
             AllowUserToDeleteRows = false,
             ReadOnly = true,
@@ -147,18 +147,13 @@ public class MainForm : Form
             RowHeadersVisible = false,
             SelectionMode = DataGridViewSelectionMode.FullRowSelect,
             MultiSelect = false,
-            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
-            AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
         };
 
-        // КРИТИЧЕСКИЙ ШАГ: Подписываемся на событие клика по строке главной таблицы статей
         _taskGrid.SelectionChanged += DgvTasks_SelectionChanged;
 
-        // Не забудьте добавить элемент управления на саму форму:
-        this.Controls.Add(dgvDetails);
-
-
         this.Controls.Add(_taskGrid);
+        this.Controls.Add(dgvDetails);
         this.Controls.Add(_logTextBox);
         this.Controls.Add(topPanel);
     }
