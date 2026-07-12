@@ -37,11 +37,11 @@ public class VkPublisherService : IPublisherService
             return false;
         }
 
-        _logger.LogInformation("[VK] Публикую иллюстрированный пост на стену через гибридный POST-запрос...");
+        _logger.LogInformation("[VK] Публикую красивый иллюстрированный пост на стену через чистый автономный клиент...");
 
         try
         {
-            // Форматируем текст поста
+            // 1. Форматируем HTML текст в красивый пост для соцсетей
             string cleanText = contentHtml
                 .Replace("<p>", "").Replace("</p>", "\n\n")
                 .Replace("<h2>", "🔥 ").Replace("</h2>", " \n")
@@ -56,36 +56,46 @@ public class VkPublisherService : IPublisherService
                                    cleanText + "\n" +
                                    "📌 Читайте этот и другие обзоры гаджетов на нашем сайте: https://mistmare.ru";
 
-            // КРИТИЧЕСКИЙ ФИКС: Токен и Версию отправляем строго в URI
-            string requestUri = "https://vk.com" +
-                                "?v=5.131" +
-                                "&access_token=" + cleanToken;
+            // 2. Формируем точный URL: токен и версию отправляем строго в адресной строке
+            string fullUrl = "https://vk.com" +
+                              "?v=5.131" +
+                              "&access_token=" + cleanToken;
 
-            // Данные сообщения упаковываем в тело POST-запроса
-            var postData = "owner_id=-" + cleanGroup +
-                           "&from_group=1" +
-                           "&message=" + Uri.EscapeDataString(finalPostText);
+            // Данные сообщения и ID группы переводим в чистую строку без использования FormUrlEncodedContent
+            var postDataString = "owner_id=-" + cleanGroup +
+                                 "&from_group=1" +
+                                 "&message=" + Uri.EscapeDataString(finalPostText);
 
-            var request = new HttpRequestMessage(HttpMethod.Post, new Uri(requestUri));
-            request.Content = new StringContent(postData, Encoding.UTF8, "application/x-www-form-urlencoded");
-
-            // Отключаем прокси и редиректы для изоляции
+            // Инициализируем полностью изолированный клиент БЕЗ BaseAddress
             var handler = new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false };
-            using var singleClient = new HttpClient(handler);
-            singleClient.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+            using var isolatedClient = new HttpClient(handler);
 
-            var wallResponse = await singleClient.SendAsync(request);
+            // Маскируем запрос под обычный браузер
+            isolatedClient.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
 
+            var content = new StringContent(postDataString, Encoding.UTF8, "application/x-www-form-urlencoded");
+
+            // КРИТИЧЕСКИЙ ФИКС: Принудительно вычисляем длину контента в байтах.
+            // Наличие заголовка Content-Length автоматически отключает chunked-кодирование в .NET 8!
+            byte[] postBytes = Encoding.UTF8.GetBytes(postDataString);
+            content.Headers.ContentLength = postBytes.Length;
+
+            // Создаем сам запрос
+            var request = new HttpRequestMessage(HttpMethod.Post, new Uri(fullUrl))
+            {
+                Content = content
+            };
+
+            // Отправляем запрос через изолированный клиент
+            var wallResponse = await isolatedClient.SendAsync(request);
+
+            // Читаем ответ как массив байт для обхода проблем с BOM и кодировками ВК
             byte[] responseBytes = await wallResponse.Content.ReadAsByteArrayAsync();
-            string wallResultString = Encoding.UTF8.GetString(responseBytes);
+            string wallResultString = Encoding.UTF8.GetString(responseBytes).Trim();
 
-            // Срезаем BOM-маркеры на всякий случай
-            wallResultString = wallResultString.Trim(new char[] { '\uFEFF', '\u200B', ' ', '\n', '\r', '\t' });
-
-            // Находим эту проверку в коде:
+            // 3. ЖЕСТКАЯ ДИАГНОСТИКА: Если ВК вернул HTML — пишем его весь на диск для анализа
             if (string.IsNullOrEmpty(wallResultString) || wallResultString.StartsWith("<"))
             {
-                // ЖЕЛЕЗНАЯ ДИАГНОСТИКА: Сохраняем всю HTML страницу на ваш диск
                 string debugFilePath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "vk_error_page.html");
                 await System.IO.File.WriteAllTextAsync(debugFilePath, wallResultString ?? "Empty response", Encoding.UTF8);
 
