@@ -301,12 +301,12 @@ public class MainForm : Form
                                 }
                                 catch (Exception pubEx)
                                 {
-                                    // Безопасно перенаправляем вызов в главный UI-поток Windows, предотвращая вылет программы
+                                    // Безопасно маршалируем вызов окна в главный поток WinForms, предотвращая крэш приложения
                                     this.BeginInvoke(new Action(() => {
                                         LogToUi("⚠️ Сбой платформы публикации: " + pubEx.Message);
 
                                         MessageBox.Show(
-                                            "Произошел контролируемый сбой при веерной рассылке:\n\n" + pubEx.Message,
+                                            "Произошел контролируемый сбой при веерной рассылке контента:\n\n" + pubEx.Message,
                                             "Информация конвейера",
                                             MessageBoxButtons.OK,
                                             MessageBoxIcon.Warning
@@ -315,8 +315,8 @@ public class MainForm : Form
                                 }
                             }
 
-                            // Фиксируем статус на основе успехов
                             task.Status = (successCount > 0) ? Domain.Enums.TaskStatus.Published : Domain.Enums.TaskStatus.Failed;
+
 
                             Invoke(new Action(() => LogToUi(task.Status == Domain.Enums.TaskStatus.Published
                                 ? "✅ Статья успешно разлетелась по медиа-каналам (" + successCount + "/" + _publishers.Count + " успешно)!"

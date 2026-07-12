@@ -24,8 +24,8 @@ public class VkPublisherService : IPublisherService
 
     public async Task<bool> PublishAsync(string title, string contentHtml, string metadata, string siteId, byte[]? imageBytes)
     {
-        string cleanToken = (_accessToken ?? "").Replace("\n", "").Replace("\r", "").Trim();
-        string cleanGroup = (_groupId ?? "").Replace("\n", "").Replace("\r", "").Trim();
+        string cleanToken = _accessToken;
+        string cleanGroup = _groupId;
 
         if (string.IsNullOrEmpty(cleanToken) || string.IsNullOrEmpty(cleanGroup))
         {
@@ -37,7 +37,7 @@ public class VkPublisherService : IPublisherService
 
         try
         {
-            // 1. Извлекаем первый абзац текста для анонса
+            // Извлекаем первый абзац текста для анонса
             string cleanText = contentHtml;
             int pStart = cleanText.IndexOf("<p>");
             int pEnd = cleanText.IndexOf("</p>");
@@ -59,10 +59,10 @@ public class VkPublisherService : IPublisherService
                                    "🚀 Читать полный обзор с подробными тестами на нашем сайте:\n" +
                                    "👉 https://mistmare.ru";
 
-            // 2. ЖЕЛЕЗНЫЙ КРИТИЧЕСКИЙ ФИКС: Все параметры, включая owner_id и message, собираем строго в URI
+            // Собираем ВСЕ параметры строго в URI для атомарности запроса
             string requestUri = "https://vk.com" +
                                 "?v=5.131" +
-                                "&owner_id=-" + cleanGroup + // Минус обязателен
+                                "&owner_id=-" + cleanGroup +
                                 "&from_group=1" +
                                 "&message=" + Uri.EscapeDataString(finalPostText) +
                                 "&access_token=" + cleanToken;
@@ -71,14 +71,14 @@ public class VkPublisherService : IPublisherService
             using var isolatedClient = new HttpClient(handler);
             isolatedClient.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
 
-            // Отправляем пустой POST, так как вся строка параметров находится в URI
+            // Отправляем пустой POST-запрос
             var wallResponse = await isolatedClient.PostAsync(requestUri, null);
 
             byte[] responseBytes = await wallResponse.Content.ReadAsByteArrayAsync();
             string wallResultString = Encoding.UTF8.GetString(responseBytes).Trim();
             wallResultString = wallResultString.Trim(new char[] { '\uFEFF', '\u200B', ' ', '\n', '\r', '\t' });
 
-            // Обновляем дамп-файл на диске
+            // Запись дампа для подстраховки
             string debugFilePath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "vk_error_page.html");
             await System.IO.File.WriteAllTextAsync(debugFilePath, wallResultString, Encoding.UTF8);
 
