@@ -301,24 +301,21 @@ public class MainForm : Form
                                 }
                                 catch (Exception pubEx)
                                 {
-                                    Invoke(new Action(() => {
-                                        LogToUi("⚠️ Сбой на одной из платформ: " + pubEx.Message);
+                                    // Безопасно перенаправляем вызов в главный UI-поток Windows, предотвращая вылет программы
+                                    this.BeginInvoke(new Action(() => {
+                                        LogToUi("⚠️ Сбой платформы публикации: " + pubEx.Message);
 
-                                        // Вывод ошибки во всплывающее модальное окно на ПК
                                         MessageBox.Show(
-                                            "Внимание! Произошел сбой при веерной публикации:\n\n" + pubEx.Message,
-                                            "Ошибка конвейера рассылки",
+                                            "Произошел контролируемый сбой при веерной рассылке:\n\n" + pubEx.Message,
+                                            "Информация конвейера",
                                             MessageBoxButtons.OK,
-                                            MessageBoxIcon.Error,
-                                            MessageBoxDefaultButton.Button1,
-                                            MessageBoxOptions.DefaultDesktopOnly
+                                            MessageBoxIcon.Warning
                                         );
                                     }));
                                 }
                             }
 
-
-                            // Задача успешна, если контент закрепился хотя бы в одном месте
+                            // Фиксируем статус на основе успехов
                             task.Status = (successCount > 0) ? Domain.Enums.TaskStatus.Published : Domain.Enums.TaskStatus.Failed;
 
                             Invoke(new Action(() => LogToUi(task.Status == Domain.Enums.TaskStatus.Published
