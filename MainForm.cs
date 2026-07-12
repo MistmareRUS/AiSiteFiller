@@ -117,9 +117,9 @@ public class MainForm : Form
             AllowUserToAddRows = false,
             RowHeadersVisible = false,
             SelectionMode = DataGridViewSelectionMode.FullRowSelect,
-            Location = new Point(20, 45),
-            Size = new Size(500, 480),
-            Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left,
+            Location = new Point(20, 95),
+            Size = new Size(500, 240),
+            Anchor = AnchorStyles.Top | AnchorStyles.Left,
         };
         _taskGrid.CellDoubleClick += TaskGrid_CellDoubleClick;
 
