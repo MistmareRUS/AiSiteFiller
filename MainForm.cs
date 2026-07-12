@@ -116,7 +116,10 @@ public class MainForm : Form
             ReadOnly = true,
             AllowUserToAddRows = false,
             RowHeadersVisible = false,
-            SelectionMode = DataGridViewSelectionMode.FullRowSelect
+            SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+            Location = new Point(20, 45),
+            Size = new Size(500, 480),
+            Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left,
         };
         _taskGrid.CellDoubleClick += TaskGrid_CellDoubleClick;
 
@@ -135,16 +138,16 @@ public class MainForm : Form
         // Настройка таблицы детализации подзадач веера
         dgvDetails = new DataGridView
         {
-            Location = new Point(20, 360), // Размещаем под вашей основной таблицей статей
-            Size = new Size(940, 180),     // Вытянутая панель для списка платформ
+            Location = new Point(540, 45), // Аккуратно встает справа от _dgv с отступом 20px
+            Size = new Size(420, 480),     // Занимает всю правую часть экрана
             AllowUserToAddRows = false,
             AllowUserToDeleteRows = false,
             ReadOnly = true,
-            AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+            BackgroundColor = Color.White,
+            RowHeadersVisible = false,
             SelectionMode = DataGridViewSelectionMode.FullRowSelect,
             MultiSelect = false,
-            BackgroundColor = Color.White,
-            RowHeadersVisible = false
+            Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right
         };
 
         // КРИТИЧЕСКИЙ ШАГ: Подписываемся на событие клика по строке главной таблицы статей
@@ -336,7 +339,8 @@ public class MainForm : Form
                     executionError = pubEx.Message;
 
                     // Контролируемый вывод всплывающего окна без падения фонового потока
-                    this.BeginInvoke(new Action(() => {
+                    this.BeginInvoke(new Action(() =>
+                    {
                         LogToUi($"⚠️ Сбой публикации на платформу [{pubTask.Platform}]: " + pubEx.Message);
                         MessageBox.Show(
                             $"Сбой публикации на платформу [{pubTask.Platform}]:\n\n{pubEx.Message}",
