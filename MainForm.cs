@@ -130,16 +130,27 @@ public class MainForm : Form
 
         _logTextBox = new TextBox
         {
-            Dock = DockStyle.Bottom,
-            Height = 180,
+            // ЖЕЛЕЗНЫЙ ФИКС: Убираем Dock, чтобы он не блокировал высоту поля!
+            Dock = DockStyle.None,
+
+            // Размещаем строго под кнопками пагинации (пагинация на Y=325 + 25 высота + 15 зазор = 365)
+            Location = new Point(20, 480),
+
+            // Задаем базовый стартовый размер (ширина 1000, высота 200)
+            Size = new Size(1000, 170),
+
             Multiline = true,
             ReadOnly = true,
             ScrollBars = ScrollBars.Vertical,
             BackColor = Color.FromArgb(20, 20, 20),
             ForeColor = Color.LightGreen,
             Font = new Font("Consolas", 9.5f),
-        };
 
+            // КРИТИЧЕСКИЙ ФИКС ANCHOR: 
+            // Привязываем к Top, Bottom, Left и Right. 
+            // Теперь при увеличении высоты формы верх логов стоит на месте, а низ растягивается до пола!
+            Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right
+        };
 
         // Настройка таблицы детализации подзадач веера
         dgvDetails = new DataGridView
