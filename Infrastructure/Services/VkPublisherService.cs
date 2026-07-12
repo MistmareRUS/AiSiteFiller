@@ -59,32 +59,42 @@ public class VkPublisherService : IPublisherService
                                    "🚀 Читать полный обзор с подробными тестами на нашем сайте:\n" +
                                    "👉 https://mistmare.ru";
 
-            // Собираем ВСЕ параметры строго в URI для атомарности запроса
+            // В URI отправляем ТОЛЬКО токен и версию, защищая длину ссылки от раздувания и ошибки 414
             string requestUri = "https://vk.com" +
                                 "?v=5.131" +
-                                "&owner_id=-" + cleanGroup +
-                                "&from_group=1" +
-                                "&message=" + Uri.EscapeDataString(finalPostText) +
                                 "&access_token=" + cleanToken;
+
+            // Текст и идентификаторы пакуем в тело POST-запроса
+            string postDataBody = "owner_id=-" + cleanGroup +
+                                  "&from_group=1" +
+                                  "&message=" + Uri.EscapeDataString(finalPostText);
 
             var handler = new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false };
             using var isolatedClient = new HttpClient(handler);
             isolatedClient.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
 
-            // Отправляем пустой POST-запрос
-            var wallResponse = await isolatedClient.PostAsync(requestUri, null);
+            // Передаем параметры через StringContent
+            var content = new StringContent(postDataBody, Encoding.UTF8, "application/x-www-form-urlencoded");
+
+            // КРИТИЧЕСКИЙ ФИКС: Явное ContentLength намертво блокирует chunked-передачу .NET 8.0, 
+            // пробивая шлюзы защиты ВКонтакте
+            byte[] bodyBytes = Encoding.UTF8.GetBytes(postDataBody);
+            content.Headers.ContentLength = bodyBytes.Length;
+
+            var request = new HttpRequestMessage(HttpMethod.Post, new Uri(requestUri)) { Content = content };
+            var wallResponse = await isolatedClient.SendAsync(request);
 
             byte[] responseBytes = await wallResponse.Content.ReadAsByteArrayAsync();
             string wallResultString = Encoding.UTF8.GetString(responseBytes).Trim();
             wallResultString = wallResultString.Trim(new char[] { '\uFEFF', '\u200B', ' ', '\n', '\r', '\t' });
 
-            // Запись дампа для подстраховки
+            // Перезаписываем дамп для контроля
             string debugFilePath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "vk_error_page.html");
             await System.IO.File.WriteAllTextAsync(debugFilePath, wallResultString, Encoding.UTF8);
 
             if (wallResultString.StartsWith("<"))
             {
-                throw new Exception("ВК вернул HTML-страницу веб-сайта вместо программного JSON-ответа.");
+                throw new Exception("ВК вернул HTML-страницу вместо программного JSON-ответа.");
             }
 
             using var wallDoc = JsonDocument.Parse(wallResultString);
