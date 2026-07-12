@@ -251,44 +251,58 @@ public class MainForm : Form
 
                         try
                         {
-                            // 1. Генерация текста статьи через ИИ
-                            string articleHtml = await _aiService.GenerateArticleAsync(task.Topic);
-
-                            // 2. Резервное сохранение текста статьи в архив PostgreSQL на вашем ПК
-                            task.ContentHtml = articleHtml;
-                            await db.SaveChangesAsync(token);
-                            Invoke(new Action(() => LogToUi("Статья #" + task.Id + " успешно заархивирована в локальный Postgres.")));
-
-                            // 3. НОВЫЙ ЭТАП: Генерация уникальной графической обложки в DALL-E 3
+                            string articleHtml = string.Empty;
                             byte[]? imageBytes = null;
-                            try
+
+                            if (string.IsNullOrEmpty(task.ContentHtml))
                             {
-                                Invoke(new Action(() => LogToUi("Создаю уникальную нейроиллюстрацию в Stable Diffusion...")));
-                                string base64Image = await _aiService.GenerateImageAsync(task.Topic);
+                                Invoke(() => LogToUi("📝 [ИИ] Генерирую новый HTML-текст статьи через ProxyAPI..."));
+                                articleHtml = await _aiService.GenerateArticleAsync(task.Topic);
 
-                                if (!string.IsNullOrEmpty(base64Image))
+                                task.ContentHtml = articleHtml;
+                                db.ArticlesQueue.Update(task);
+                                await db.SaveChangesAsync();
+                                Invoke(() => LogToUi($"Статья #{task.Id} успешно заархивирована в локальный Postgres."));
+                            }
+                            else
+                            {
+                                Invoke(() => LogToUi("♻️ [Архив] Обнаружен готовый текст статьи. Пропускаю вызов Текстового ИИ."));
+                                articleHtml = task.ContentHtml;
+                            }
+
+                            IFileStorageService mongoStorage = new MongoDbStorageService(_configuration, _loggerFactory.CreateLogger<MongoDbStorageService>());
+                            if (string.IsNullOrEmpty(task.MongoImageId))
+                            {
+                                Invoke(() => LogToUi("🎨 [Локальный ИИ] Создаю уникальную нейроиллюстрацию в Stable Diffusion..."));
+                                try
                                 {
-                                    // Переводим Base64 от ProxyAPI в массив байт
-                                    imageBytes = Convert.FromBase64String(base64Image);
+                                    string base64Image = await _aiService.GenerateImageAsync(task.Topic);
+                                    if (!string.IsNullOrEmpty(base64Image))
+                                    {
+                                        imageBytes = Convert.FromBase64String(base64Image);
 
-                                    // Инициализируем сервис MongoDB GridFS
-                                    IFileStorageService mongoStorage = new MongoDbStorageService(_configuration, _loggerFactory.CreateLogger<MongoDbStorageService>());
 
-                                    // СОХРАНЯЕМ В MONGO: отправляем бинарник в безопасный архив
-                                    string safeFileName = "cover_" + task.Id + ".jpg";
-                                    string mongoId = await mongoStorage.SaveFileAsync(imageBytes, safeFileName, "image/jpeg");
-
-                                    task.MongoImageId = mongoId;
-                                    await db.SaveChangesAsync(token);
-                                    Invoke(new Action(() => LogToUi("💾 [Медиа-Архив] Обложка сохранена в безопасное GridFS-хранилище MongoDB.")));
+                                        string mongoId = await mongoStorage.SaveFileAsync(imageBytes, $"{task.Id}_cover.jpg", task.Category ?? "");
+                                        task.MongoImageId = mongoId;
+                                        db.ArticlesQueue.Update(task);
+                                        Invoke(() => LogToUi("💾 [Медиа-Архив] Обложка успешно сохранена в MongoDB."));
+                                    }
+                                }
+                                catch (Exception imgEx)
+                                {
+                                    Invoke(() => LogToUi("⚠️ Сбой обработки картинки (пропускаю): " + imgEx.Message));
                                 }
                             }
-                            catch (Exception imgEx)
+                            else
                             {
-                                Invoke(new Action(() => LogToUi("⚠️ Сбой обработки картинки (пропускаю): " + imgEx.Message)));
+                                Invoke(() => LogToUi("♻️ [Архив] Обложка этой статьи уже есть в MongoDB. Пропускаю вызов Stable Diffusion."));
+                                // Передаем null, так как на сайт картинка уже залита, а ВК мы отладим на отправку чистого текста
+                                imageBytes = await mongoStorage.GetFileAsync(task.MongoImageId);
                             }
+                            await db.SaveChangesAsync();
 
-                            Invoke(new Action(() => LogToUi("🚀 [Веерный конвейер] Запускаю автоматическую рассылку по всем платформам...")));
+                            // Дальше без изменений продолжается ваш родной цикл веерной рассылки
+                            Invoke(() => LogToUi("🚀 [Веерный конвейер] Запускаю автоматическую рассылку по всем платформам..."));
 
                             int successCount = 0;
 
@@ -302,7 +316,8 @@ public class MainForm : Form
                                 catch (Exception pubEx)
                                 {
                                     // Безопасно маршалируем вызов окна в главный поток WinForms, предотвращая крэш приложения
-                                    this.BeginInvoke(new Action(() => {
+                                    this.BeginInvoke(new Action(() =>
+                                    {
                                         LogToUi("⚠️ Сбой платформы публикации: " + pubEx.Message);
 
                                         MessageBox.Show(

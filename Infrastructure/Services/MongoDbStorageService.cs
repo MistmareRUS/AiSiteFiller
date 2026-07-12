@@ -58,4 +58,18 @@ public class MongoDbStorageService : IFileStorageService
             throw;
         }
     }
+    public async Task<byte[]> GetFileAsync(string id)
+    {
+        try
+        {
+            var objectId = new MongoDB.Bson.ObjectId(id);
+            return await _gridFsBucket.DownloadAsBytesAsync(objectId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError($"❌ [MongoDB] Ошибка при скачивании файла из GridFS: {ex.Message}");
+            return Array.Empty<byte>();
+        }
+    }
+
 }
