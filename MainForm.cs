@@ -306,6 +306,14 @@ public class MainForm : Form
                                 {
                                     // Если одна платформа упала (например, лег хостинг сайта), это не заблокирует отправку в ВК!
                                     Invoke(new Action(() => LogToUi("⚠️ Сбой на одной из платформ публикации: " + pubEx.Message)));
+                                    MessageBox.Show(
+                                        "Внимание! Произошел сбой при веерной публикации:\n\n" + pubEx.Message,
+                                        "Ошибка конвейера рассылки",
+                                        MessageBoxButtons.OK,
+                                        MessageBoxIcon.Error,
+                                        MessageBoxDefaultButton.Button1,
+                                        MessageBoxOptions.DefaultDesktopOnly // Поверх всех окон
+                                    );
                                 }
                             }
 

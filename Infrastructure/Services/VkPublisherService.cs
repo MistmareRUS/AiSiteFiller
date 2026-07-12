@@ -37,11 +37,11 @@ public class VkPublisherService : IPublisherService
             return false;
         }
 
-        _logger.LogInformation("[VK] Публикую кликабельный SEO-анонс статьи на стену группы...");
+        _logger.LogInformation("[VK] Публикую красивый SEO-анонс статьи на стену паблика...");
 
         try
         {
-            // 1. Извлекаем только первый абзац текста для создания интригующего анонса в соцсети
+            // 1. Извлекаем первый абзац текста для анонса
             string cleanText = contentHtml;
             int pStart = cleanText.IndexOf("<p>");
             int pEnd = cleanText.IndexOf("</p>");
@@ -51,7 +51,6 @@ public class VkPublisherService : IPublisherService
                 cleanText = cleanText.Substring(pStart + 3, pEnd - pStart - 3);
             }
 
-            // Вырезаем остаточные теги
             cleanText = System.Text.RegularExpressions.Regex.Replace(cleanText, @"<[^>]*>", "");
 
             if (cleanText.Length > 300)
@@ -59,32 +58,31 @@ public class VkPublisherService : IPublisherService
                 cleanText = cleanText.Substring(0, 300) + "...";
             }
 
-            // Формируем красивую карточку поста со ссылкой на ваш сайт для переливания трафика
             string finalPostText = "🔥 НОВАЯ СТАТЬЯ: " + title.ToUpper() + "\n\n" +
                                    cleanText + "\n\n" +
-                                   "🚀 Читать полный обзор с графикой и тестами на нашем сайте:\n" +
+                                   "🚀 Читать полный обзор с подробными тестами на нашем сайте:\n" +
                                    "👉 https://mistmare.ru";
 
-            // 2. Сборка параметров запроса
+            // 2. ИСПРАВЛЕНИЕ АДРЕСА: Четкий, абсолютный URI со всеми слешами
             string requestUri = "https://vk.com" +
                                 "?v=5.131" +
                                 "&access_token=" + cleanToken;
 
-            var postDataString = "owner_id=-" + cleanGroup +
-                                 "&from_group=1" +
-                                 "&message=" + Uri.EscapeDataString(finalPostText);
+            // Данные сообщения. Для пабликов важенfrom_group=1
+            var postData = new System.Collections.Generic.Dictionary<string, string>
+        {
+            { "owner_id", "-" + cleanGroup }, // Минус перед ID обязателен для стен сообществ
+            { "from_group", "1" },           // Публикация строго от имени сообщества
+            { "message", finalPostText }
+        };
 
             var handler = new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false };
             using var isolatedClient = new HttpClient(handler);
             isolatedClient.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
 
-            var content = new StringContent(postDataString, Encoding.UTF8, "application/x-www-form-urlencoded");
-
-            byte[] postBytes = Encoding.UTF8.GetBytes(postDataString);
-            content.Headers.ContentLength = postBytes.Length;
-
-            var request = new HttpRequestMessage(HttpMethod.Post, new Uri(requestUri)) { Content = content };
-            var wallResponse = await isolatedClient.SendAsync(request);
+            // Отправляем как стандартную форму
+            var content = new FormUrlEncodedContent(postData);
+            var wallResponse = await isolatedClient.PostAsync(requestUri, content);
 
             byte[] responseBytes = await wallResponse.Content.ReadAsByteArrayAsync();
             string wallResultString = Encoding.UTF8.GetString(responseBytes).Trim();
@@ -115,4 +113,5 @@ public class VkPublisherService : IPublisherService
             throw;
         }
     }
+
 }
