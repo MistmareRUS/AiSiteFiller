@@ -315,14 +315,14 @@ public class MainForm : Form
                                 }
                                 catch (Exception pubEx)
                                 {
-                                    // Безопасно маршалируем вызов окна в главный поток WinForms, предотвращая крэш приложения
-                                    this.BeginInvoke(new Action(() =>
-                                    {
+                                    // Безопасно выводим ошибку на экран в главном UI-потоке, не прерывая работу робота
+                                    this.BeginInvoke(new Action(() => {
                                         LogToUi("⚠️ Сбой платформы публикации: " + pubEx.Message);
 
+                                        // Выводим развернутое модальное окно с детальным текстом ошибки ВК
                                         MessageBox.Show(
-                                            "Произошел контролируемый сбой при веерной рассылке контента:\n\n" + pubEx.Message,
-                                            "Информация конвейера",
+                                            $"Внимание! Произошел сбой при веерной рассылке:\n\n{pubEx.Message}",
+                                            "Детальный лог ошибки конвейера",
                                             MessageBoxButtons.OK,
                                             MessageBoxIcon.Warning
                                         );

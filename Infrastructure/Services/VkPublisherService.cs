@@ -37,7 +37,7 @@ public class VkPublisherService : IPublisherService
 
         try
         {
-            // Извлекаем первый абзац текста для анонса
+            // Форматируем текст анонса (берём первый абзац)
             string cleanText = contentHtml;
             int pStart = cleanText.IndexOf("<p>");
             int pEnd = cleanText.IndexOf("</p>");
@@ -59,43 +59,70 @@ public class VkPublisherService : IPublisherService
                                    "🚀 Читать полный обзор с подробными тестами на нашем сайте:\n" +
                                    "👉 https://mistmare.ru";
 
-            // 1. В URI отправляем ТОЛЬКО токен и версию, чтобы ВК сразу авторизовал запрос
+            // В URI отправляем только служебные данные
             string requestUri = "https://vk.com" +
                                 "?v=5.131" +
                                 "&access_token=" + cleanToken;
 
-            // 2. Все содержательные параметры упаковываем в тело POST-запроса
-            // Все содержательные параметры упаковываем в тело POST-запроса
-            var postData = new System.Collections.Generic.Dictionary<string, string>
-            {
-                { "owner_id", "-" + cleanGroup }, // ID паблика с минусом
-                { "from_group", "1" },           // Публикация от имени сообщества
-                { "message", finalPostText },     // Текст нашего сочного анонса
-                { "signed", "0" }                 // ◄── ЖЕЛЕЗНЫЙ ФИКС ОШИБКИ 214 ДЛЯ ПАБЛИКОВ В КИТЕ!
-            };
+            // ЖЕЛЕЗНЫЙ ФИКС: Собираем параметры в ручную строку контента
+            string postDataBody = "owner_id=-" + cleanGroup +
+                                  "&from_group=1" +
+                                  "&signed=0" +
+                                  "&message=" + Uri.EscapeDataString(finalPostText);
 
             var handler = new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false };
             using var isolatedClient = new HttpClient(handler);
             isolatedClient.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
 
-            // Кодируем словарь параметров в стандартный формат x-www-form-urlencoded
-            var content = new FormUrlEncodedContent(postData);
+            // Используем StringContent вместо капризного FormUrlEncodedContent
+            var content = new StringContent(postDataBody, Encoding.UTF8, "application/x-www-form-urlencoded");
 
-            // Отправляем полноценный POST-запрос с данными в теле
-            var wallResponse = await isolatedClient.PostAsync(requestUri, content);
+            // НАМЕРТВО БЛОКИРУЕМ CHUNKED-ПЕРЕДАЧУ .NET 8.0: Явно задаем длину контента в байтах
+            byte[] bodyBytes = Encoding.UTF8.GetBytes(postDataBody);
+            content.Headers.ContentLength = bodyBytes.Length;
 
+            var request = new HttpRequestMessage(HttpMethod.Post, new Uri(requestUri)) { Content = content };
+            var wallResponse = await isolatedClient.SendAsync(request);
 
             byte[] responseBytes = await wallResponse.Content.ReadAsByteArrayAsync();
             string wallResultString = Encoding.UTF8.GetString(responseBytes).Trim();
-            wallResultString = wallResultString.Trim(new char[] { '\uFEFF', '\u200B', ' ', '\n', '\r', '\t' });
 
-            // Перезаписываем дамп для контроля
+            // Срезаем BOM-маркеры ВК
+            wallResultString = wallResultString.Trim(new char[] { '\uFEFF', '\u200B', ' ', '\n', '\r', '\t' });
+#if DEBUG
+            // Если ответ начинается как веб-страница, вытаскиваем из неё человеческий текст ошибки
+            //if (wallResultString.StartsWith("<"))
+            //{
+            //    string cleanHtmlError = "Неизвестная ошибка шлюза веб-сервера.";
+            //    try
+            //    {
+            //        // Вытаскиваем содержимое между тегами <body> и </body>
+            //        var match = System.Text.RegularExpressions.Regex.Match(wallResultString, @"<body[^>]*>(.*?)</body>", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Singleline);
+            //        if (match.Success)
+            //        {
+            //            // Очищаем внутренности от лишних HTML-тегов для красивого вывода в MessageBox
+            //            cleanHtmlError = System.Text.RegularExpressions.Regex.Replace(match.Groups[1].Value, @"<[^>]*>", "").Trim();
+            //        }
+            //        else
+            //        {
+            //            // Если тега body нет, берем первые 200 символов страницы
+            //            cleanHtmlError = System.Text.RegularExpressions.Regex.Replace(wallResultString, @"<[^>]*>", "").Trim();
+            //            if (cleanHtmlError.Length > 200) cleanHtmlError = cleanHtmlError.Substring(0, 200) + "...";
+            //        }
+            //    }
+            //    catch { }
+
+            //    throw new Exception($"[Сетевой сбой ВК].\nСервер вернул ошибку веб-узла:\n\n👉 {cleanHtmlError}");
+            //}
+#endif
+
+            // Оставляем дамп-лог для истории
             string debugFilePath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "vk_error_page.html");
             await System.IO.File.WriteAllTextAsync(debugFilePath, wallResultString, Encoding.UTF8);
 
             if (wallResultString.StartsWith("<"))
             {
-                throw new Exception("ВК вернул HTML-страницу вместо программного JSON-ответа.");
+                throw new Exception("ВК вернул HTML-страницу вместо JSON-ответа.");
             }
 
             using var wallDoc = JsonDocument.Parse(wallResultString);
@@ -104,7 +131,9 @@ public class VkPublisherService : IPublisherService
             {
                 string errMsg = wallErrorEl.GetProperty("error_msg").GetString() ?? "Unknown Error";
                 int errCode = wallErrorEl.GetProperty("error_code").GetInt32();
-                throw new Exception("VK API Error [Код " + errCode + "]: " + errMsg);
+
+                // ПРОБРАСЫВАЕМ ПОДРОБНЫЙ ТЕКСТ ДЛЯ ВСПЛЫВАШКИ СЮДА:
+                throw new Exception($"[Код {errCode}]: {errMsg}\n\nПолный ответ сервера:\n{wallResultString}");
             }
 
             if (wallDoc.RootElement.TryGetProperty("response", out var responseEl))
