@@ -65,12 +65,14 @@ public class VkPublisherService : IPublisherService
                                 "&access_token=" + cleanToken;
 
             // 2. Все содержательные параметры упаковываем в тело POST-запроса
+            // Все содержательные параметры упаковываем в тело POST-запроса
             var postData = new System.Collections.Generic.Dictionary<string, string>
-        {
-            { "owner_id", "-" + cleanGroup }, // Минус перед ID обязателен для пабликов
-            { "from_group", "1" },           // Публикация от имени сообщества
-            { "message", finalPostText }      // Текст нашего сочного анонса
-        };
+            {
+                { "owner_id", "-" + cleanGroup }, // ID паблика с минусом
+                { "from_group", "1" },           // Публикация от имени сообщества
+                { "message", finalPostText },     // Текст нашего сочного анонса
+                { "signed", "0" }                 // ◄── ЖЕЛЕЗНЫЙ ФИКС ОШИБКИ 214 ДЛЯ ПАБЛИКОВ В КИТЕ!
+            };
 
             var handler = new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false };
             using var isolatedClient = new HttpClient(handler);
