@@ -292,30 +292,31 @@ public class MainForm : Form
 
                             int successCount = 0;
 
-                            // Обходим всех зарегистрированных издателей независимо от их количества
                             foreach (var publisher in _publishers)
                             {
                                 try
                                 {
-                                    // Каждый сервис сам знает, как публиковать (полиморфизм в действии)
                                     bool isPublished = await publisher.PublishAsync(task.Topic, articleHtml, task.Category, task.SiteId, imageBytes);
-
                                     if (isPublished) successCount++;
                                 }
                                 catch (Exception pubEx)
                                 {
-                                    // Если одна платформа упала (например, лег хостинг сайта), это не заблокирует отправку в ВК!
-                                    Invoke(new Action(() => LogToUi("⚠️ Сбой на одной из платформ публикации: " + pubEx.Message)));
-                                    MessageBox.Show(
-                                        "Внимание! Произошел сбой при веерной публикации:\n\n" + pubEx.Message,
-                                        "Ошибка конвейера рассылки",
-                                        MessageBoxButtons.OK,
-                                        MessageBoxIcon.Error,
-                                        MessageBoxDefaultButton.Button1,
-                                        MessageBoxOptions.DefaultDesktopOnly // Поверх всех окон
-                                    );
+                                    Invoke(new Action(() => {
+                                        LogToUi("⚠️ Сбой на одной из платформ: " + pubEx.Message);
+
+                                        // Вывод ошибки во всплывающее модальное окно на ПК
+                                        MessageBox.Show(
+                                            "Внимание! Произошел сбой при веерной публикации:\n\n" + pubEx.Message,
+                                            "Ошибка конвейера рассылки",
+                                            MessageBoxButtons.OK,
+                                            MessageBoxIcon.Error,
+                                            MessageBoxDefaultButton.Button1,
+                                            MessageBoxOptions.DefaultDesktopOnly
+                                        );
+                                    }));
                                 }
                             }
+
 
                             // Задача успешна, если контент закрепился хотя бы в одном месте
                             task.Status = (successCount > 0) ? Domain.Enums.TaskStatus.Published : Domain.Enums.TaskStatus.Failed;
