@@ -59,30 +59,25 @@ public class VkPublisherService : IPublisherService
                                    "🚀 Читать полный обзор с подробными тестами на нашем сайте:\n" +
                                    "👉 https://mistmare.ru";
 
-            // В URI отправляем только служебные данные
-            string requestUri = "https://vk.com" +
-                                "?v=5.131" +
-                                "&access_token=" + cleanToken;
+            // Сборка URL строго через конкатенацию по договору
+            string requestUri = "https://" + "api." + "vk.com" + "/method/" + "wall.post" + "?v=5.131&access_token=" + cleanToken;
 
-            // Передаем ТОЛЬКО owner_id и message. 
-            // Для токена самой группы этого более чем достаточно, чтобы выпустить пост от имени паблика
-            string postDataBody = "owner_id=-" + cleanGroup.Replace("-", "").Trim() +
-                                  "&message=" + Uri.EscapeDataString(finalPostText);
-
+            string targetGroupId = cleanGroup.Replace("-", "").Trim();
+            string postDataBody = "owner_id=-" + targetGroupId + "&message=" + Uri.EscapeDataString(finalPostText);
 
             var handler = new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false };
             using var isolatedClient = new HttpClient(handler);
             isolatedClient.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
 
-            // Используем StringContent вместо капризного FormUrlEncodedContent
             var content = new StringContent(postDataBody, Encoding.UTF8, "application/x-www-form-urlencoded");
 
-            // НАМЕРТВО БЛОКИРУЕМ CHUNKED-ПЕРЕДАЧУ .NET 8.0: Явно задаем длину контента в байтах
             byte[] bodyBytes = Encoding.UTF8.GetBytes(postDataBody);
             content.Headers.ContentLength = bodyBytes.Length;
 
             var request = new HttpRequestMessage(HttpMethod.Post, new Uri(requestUri)) { Content = content };
             var wallResponse = await isolatedClient.SendAsync(request);
+
+
 
             byte[] responseBytes = await wallResponse.Content.ReadAsByteArrayAsync();
             string wallResultString = Encoding.UTF8.GetString(responseBytes).Trim();
