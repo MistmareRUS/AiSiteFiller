@@ -13,6 +13,8 @@ public class WordPressPublisherService : IPublisherService
 {
     private readonly ILogger<WordPressPublisherService> _logger;
     private readonly IConfiguration _configuration;
+    
+    public string PlatformName => "WordPress";
 
     public WordPressPublisherService(IConfiguration configuration, ILogger<WordPressPublisherService> logger)
     {

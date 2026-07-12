@@ -27,6 +27,8 @@ public class MainForm : Form
     private ComboBox _cmbCategoryFilter = null!;
     private DataTable _currentDataTable = null!;
     private Button _btnAddTask = null!;
+    private DataGridView dgvDetails = null!; // Таблица для отображения подзадач веера
+
 
 
     private CancellationTokenSource? _cts;
@@ -129,6 +131,28 @@ public class MainForm : Form
             ForeColor = Color.LightGreen,
             Font = new Font("Consolas", 9.5f)
         };
+
+        // Настройка таблицы детализации подзадач веера
+        dgvDetails = new DataGridView
+        {
+            Location = new Point(20, 360), // Размещаем под вашей основной таблицей статей
+            Size = new Size(940, 180),     // Вытянутая панель для списка платформ
+            AllowUserToAddRows = false,
+            AllowUserToDeleteRows = false,
+            ReadOnly = true,
+            AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+            SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+            MultiSelect = false,
+            BackgroundColor = Color.White,
+            RowHeadersVisible = false
+        };
+
+        // КРИТИЧЕСКИЙ ШАГ: Подписываемся на событие клика по строке главной таблицы статей
+        _taskGrid.SelectionChanged += DgvTasks_SelectionChanged;
+
+        // Не забудьте добавить элемент управления на саму форму:
+        this.Controls.Add(dgvDetails);
+
 
         this.Controls.Add(_taskGrid);
         this.Controls.Add(_logTextBox);
@@ -352,36 +376,37 @@ public class MainForm : Form
     }
 
 
-    private void RefreshGrid()
+    private async void RefreshGrid()
     {
         try
         {
             using var db = new AppDbContext();
 
-            var list = db.ArticlesQueue
-                .OrderByDescending(t => t.Id)
-                .Take(200)
-                .ToList();
+            // Загружаем только чистые метаданные статей, без привязки к статусам веера
+            var articles = await db.ArticlesQueue
+                .Select(a => new
+                {
+                    a.Id,
+                    Тема = a.Topic,
+                    Рубрика = a.Category,
+                    Сайт = a.SiteId,
+                    Создано = a.CreatedAt.ToLocalTime().ToString("dd.MM.yyyy HH:mm")
+                })
+                .OrderByDescending(a => a.Id)
+                .ToListAsync();
 
-            DataTable dt = new DataTable();
-            dt.Columns.Add("Id", typeof(int));
-            dt.Columns.Add("Topic", typeof(string));
-            dt.Columns.Add("Category", typeof(string));
-            dt.Columns.Add("SiteId", typeof(string));
-            dt.Columns.Add("Status", typeof(string));
-            dt.Columns.Add("CreatedAt", typeof(DateTime));
-
-            foreach (var task in list)
+            // Безопасно обновляем DataSource в главном потоке формы
+            this.BeginInvoke(new Action(() =>
             {
-                dt.Rows.Add(task.Id, task.Topic, task.Category, task.SiteId, task.Status.ToString(), task.CreatedAt);
-            }
+                _taskGrid.DataSource = articles;
 
-            _currentDataTable = dt;
-            ApplyFiltersAndSorting(null, EventArgs.Empty);
+                // Триггерим обновление нижней панели для первой выделившейся строки
+                DgvTasks_SelectionChanged(null, EventArgs.Empty);
+            }));
         }
         catch (Exception ex)
         {
-            LogToUi("Не удалось обновить таблицу данных: " + ex.Message);
+            this.BeginInvoke(new Action(() => LogToUi($"💥 Ошибка обновления таблицы статей: {ex.Message}")));
         }
     }
 
@@ -482,17 +507,54 @@ public class MainForm : Form
             LogToUi("⚠️ Ошибка при открытии окна просмотра: " + ex.Message);
         }
     }
-    private void BtnAddTask_Click(object? sender, EventArgs e)
+    private void BtnAddTask_Click(object sender, EventArgs e)
     {
-        using var addForm = new AddTaskForm();
-
-        // Если пользователь заполнил поля и нажал "Сохранить"
+        var platforms = _publishers.Select(p => p.PlatformName);
+        using var addForm = new AddTaskForm(platforms);
         if (addForm.ShowDialog(this) == DialogResult.OK)
         {
             LogToUi("✏️ [Очередь] В базу данных вручную добавлена новая задача.");
-            RefreshGrid(); // Мгновенно обновляем интерактивную сетку на экране
+            RefreshGrid();
         }
     }
 
+    private async void DgvTasks_SelectionChanged(object? sender, EventArgs e)
+    {
+        // Если в главной таблице ничего не выбрано, очищаем нижнюю панель
+        if (_taskGrid.CurrentRow == null)
+        {
+            dgvDetails.DataSource = null;
+            return;
+        }
+
+        try
+        {
+            // Вытаскиваем числовой Id выбранной статьи из первой ячейки строки
+            if (_taskGrid.CurrentRow.Cells[0].Value is int articleId)
+            {
+                using var db = new AppDbContext();
+
+                // Выбираем подзадачи для текущей статьи строго по нашей snake_case структуре
+                var detailsData = await db.PublicationTasks
+                    .Where(p => p.ArticleTaskId == articleId)
+                    .Select(p => new
+                    {
+                        Платформа = p.Platform,
+                        Статус = p.Status.ToString(),
+                        Обработано = p.ProcessedAt.HasValue ? p.ProcessedAt.Value.ToLocalTime().ToString("dd.MM.yyyy HH:mm") : "—",
+                        Ошибка = p.ErrorMessage ?? "Ошибок нет"
+                    })
+                    .ToListAsync();
+
+                // Выводим данные в нижний грид
+                dgvDetails.DataSource = detailsData;
+            }
+        }
+        catch (Exception ex)
+        {
+            // Используем родное логирование формы
+            LogToUi($"⚠️ Ошибка загрузки детализации веера: {ex.Message}");
+        }
+    }
 
 }

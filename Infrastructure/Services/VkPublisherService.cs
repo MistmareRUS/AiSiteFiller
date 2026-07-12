@@ -12,6 +12,8 @@ public class VkPublisherService : IPublisherService
     private readonly string _groupId;
     private readonly ILogger<VkPublisherService> _logger;
 
+    public string PlatformName => "VK";
+
     public VkPublisherService(IConfiguration configuration, ILogger<VkPublisherService> logger)
     {
         _logger = logger;
