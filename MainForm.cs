@@ -281,11 +281,16 @@ public class MainForm : Form
                                     {
                                         imageBytes = Convert.FromBase64String(base64Image);
 
-
+                                        // Вызываем ваш метод со скриншота: SaveFileAsync
                                         string mongoId = await mongoStorage.SaveFileAsync(imageBytes, $"{task.Id}_cover.jpg", task.Category ?? "");
                                         task.MongoImageId = mongoId;
-                                        db.ArticlesQueue.Update(task);
-                                        Invoke(() => LogToUi("💾 [Медиа-Архив] Обложка успешно сохранена в MongoDB."));
+
+                                        using (var dbContext = new AppDbContext())
+                                        {
+                                            dbContext.ArticlesQueue.Update(task);
+                                            await dbContext.SaveChangesAsync();
+                                        }
+                                        Invoke(() => LogToUi("💾 [Медиа-Архив] Обложка успешно сохранена в MongoDB GridFS."));
                                     }
                                 }
                                 catch (Exception imgEx)
@@ -295,10 +300,12 @@ public class MainForm : Form
                             }
                             else
                             {
-                                Invoke(() => LogToUi("♻️ [Архив] Обложка этой статьи уже есть в MongoDB. Пропускаю вызов Stable Diffusion."));
-                                // Передаем null, так как на сайт картинка уже залита, а ВК мы отладим на отправку чистого текста
+                                Invoke(() => LogToUi("♻️ [Архив] Обложка этой статьи уже есть в MongoDB. Выкачиваю байты для рассылки..."));
+
+                                // ЖЕЛЕЗНЫЙ ФИКС: Вместо пустого массива выгружаем реальные байты картинки из Монго для ВК!
                                 imageBytes = await mongoStorage.GetFileAsync(task.MongoImageId);
                             }
+
                             await db.SaveChangesAsync();
 
                             // Дальше без изменений продолжается ваш родной цикл веерной рассылки
