@@ -36,8 +36,7 @@ public class MainForm : Form
 
     // Инфраструктурные сервисы
     private IAiService _aiService = null!;
-    private IPublisherService _wpPublisherService = null!;
-    private IPublisherService _vkPublisherService = null!; // Для поддержки ВК
+    private List<IPublisherService> _publishers = null!;
     private IContentPlannerService _contentPlanner = null!;
 
     public MainForm(IConfiguration configuration)
@@ -137,17 +136,18 @@ public class MainForm : Form
 
     private void InitializeDependencies()
     {
-        // Создаем локальную изолированную фабрику логов для наших внутренних сервисов
-        _loggerFactory = LoggerFactory.Create(builder =>
-        {
-            builder.AddFilter("AiSiteFiller", LogLevel.Debug);
-        });
+        _loggerFactory = LoggerFactory.Create(builder => { builder.AddFilter("AiSiteFiller", LogLevel.Debug); });
 
-        // Инициализируем сервисы, передавая им строго изолированные логеры
         _aiService = new OpenAiGptService(_configuration, _loggerFactory.CreateLogger<OpenAiGptService>());
-        _wpPublisherService = new WordPressPublisherService(_configuration, _loggerFactory.CreateLogger<WordPressPublisherService>());
-        _vkPublisherService = new VkPublisherService(_configuration, _loggerFactory.CreateLogger<VkPublisherService>());
         _contentPlanner = new ContentPlannerService(_aiService);
+
+        // Инициализируем и упаковываем всех издателей в единый веерный массив
+        _publishers = new List<IPublisherService>
+        {
+            new WordPressPublisherService(_configuration, _loggerFactory.CreateLogger<WordPressPublisherService>()),
+            new VkPublisherService(_configuration, _loggerFactory.CreateLogger<VkPublisherService>())
+            // Сюда в будущем в одну строчку добавятся: new TelegramPublisherService(...), new DzenPublisherService(...)
+        };
 
         LogToUi("⚙️ Синхронизация структуры базы данных PostgreSQL через EF Core...");
 
@@ -288,38 +288,34 @@ public class MainForm : Form
                                 Invoke(new Action(() => LogToUi("⚠️ Сбой обработки картинки (пропускаю): " + imgEx.Message)));
                             }
 
-                            Invoke(new Action(() => LogToUi("🚀 [Веерный конвейер] Запускаю одновременную публикацию на все платформы...")));
+                            Invoke(new Action(() => LogToUi("🚀 [Веерный конвейер] Запускаю автоматическую рассылку по всем платформам...")));
 
-                            // 1. Отправляем статью на WordPress сайт
-                            bool isWpPublished = false;
-                            try
-                            {
-                                Invoke(new Action(() => LogToUi("🌐 [Сайт] Публикую статью на tech-info.mistmare.ru...")));
-                                isWpPublished = await _wpPublisherService.PublishAsync(task.Topic, articleHtml, task.Category, task.SiteId, imageBytes);
-                            }
-                            catch (Exception wpEx)
-                            {
-                                Invoke(new Action(() => LogToUi("⚠️ Ошибка публикации на сайт: " + wpEx.Message)));
-                            }
+                            int successCount = 0;
 
-                            // 2. Параллельно отправляем эту же статью во ВКонтакте (лонгрид)
-                            bool isVkPublished = false;
-                            try
+                            // Обходим всех зарегистрированных издателей независимо от их количества
+                            foreach (var publisher in _publishers)
                             {
-                                Invoke(new Action(() => LogToUi("📱 [ВКонтакте] Публикую статью в сообщество ВК...")));
-                                isVkPublished = await _vkPublisherService.PublishAsync(task.Topic, articleHtml, task.Category, task.SiteId, imageBytes);
-                            }
-                            catch (Exception vkEx)
-                            {
-                                Invoke(new Action(() => LogToUi("⚠️ Ошибка публикации в ВК: " + vkEx.Message)));
+                                try
+                                {
+                                    // Каждый сервис сам знает, как публиковать (полиморфизм в действии)
+                                    bool isPublished = await publisher.PublishAsync(task.Topic, articleHtml, task.Category, task.SiteId, imageBytes);
+
+                                    if (isPublished) successCount++;
+                                }
+                                catch (Exception pubEx)
+                                {
+                                    // Если одна платформа упала (например, лег хостинг сайта), это не заблокирует отправку в ВК!
+                                    Invoke(new Action(() => LogToUi("⚠️ Сбой на одной из платформ публикации: " + pubEx.Message)));
+                                }
                             }
 
-                            // Задача считается успешной, если контент закрепился хотя бы на одной из главных платформ
-                            task.Status = (isWpPublished || isVkPublished) ? Domain.Enums.TaskStatus.Published : Domain.Enums.TaskStatus.Failed;
+                            // Задача успешна, если контент закрепился хотя бы в одном месте
+                            task.Status = (successCount > 0) ? Domain.Enums.TaskStatus.Published : Domain.Enums.TaskStatus.Failed;
 
                             Invoke(new Action(() => LogToUi(task.Status == Domain.Enums.TaskStatus.Published
-                                ? "✅ Контент-конвейер успешно завершил веерную публикацию!"
-                                : "❌ Все платформы отклонили запрос. Текст сохранен в локальный архив Postgres.")));
+                                ? "✅ Статья успешно разлетелась по медиа-каналам (" + successCount + "/" + _publishers.Count + " успешно)!"
+                                : "❌ Все платформы отклонили запрос. Текст сохранен в архив Postgres.")));
+
                         }
 
                         catch (Exception ex)
