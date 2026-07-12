@@ -37,69 +37,64 @@ public class VkPublisherService : IPublisherService
             return false;
         }
 
-        _logger.LogInformation("[VK] Публикую красивый иллюстрированный пост на стену через чистый автономный клиент...");
+        _logger.LogInformation("[VK] Публикую кликабельный SEO-анонс статьи на стену группы...");
 
         try
         {
-            // 1. Форматируем HTML текст в красивый пост для соцсетей
-            string cleanText = contentHtml
-                .Replace("<p>", "").Replace("</p>", "\n\n")
-                .Replace("<h2>", "🔥 ").Replace("</h2>", " \n")
-                .Replace("<h3>", "⚡ ").Replace("</h3>", " \n")
-                .Replace("<ul>", "").Replace("</ul>", "")
-                .Replace("<li>", "🔹 ").Replace("</li>", "\n")
-                .Replace("strong", "").Replace("</strong>", "");
+            // 1. Извлекаем только первый абзац текста для создания интригующего анонса в соцсети
+            string cleanText = contentHtml;
+            int pStart = cleanText.IndexOf("<p>");
+            int pEnd = cleanText.IndexOf("</p>");
 
+            if (pStart >= 0 && pEnd > pStart)
+            {
+                cleanText = cleanText.Substring(pStart + 3, pEnd - pStart - 3);
+            }
+
+            // Вырезаем остаточные теги
             cleanText = System.Text.RegularExpressions.Regex.Replace(cleanText, @"<[^>]*>", "");
 
-            string finalPostText = "📰 " + title.ToUpper() + "\n\n" +
-                                   cleanText + "\n" +
-                                   "📌 Читайте этот и другие обзоры гаджетов на нашем сайте: https://mistmare.ru";
+            if (cleanText.Length > 300)
+            {
+                cleanText = cleanText.Substring(0, 300) + "...";
+            }
 
-            // 2. Формируем точный URL: токен и версию отправляем строго в адресной строке
-            string fullUrl = "https://vk.com" +
-                              "?v=5.131" +
-                              "&access_token=" + cleanToken;
+            // Формируем красивую карточку поста со ссылкой на ваш сайт для переливания трафика
+            string finalPostText = "🔥 НОВАЯ СТАТЬЯ: " + title.ToUpper() + "\n\n" +
+                                   cleanText + "\n\n" +
+                                   "🚀 Читать полный обзор с графикой и тестами на нашем сайте:\n" +
+                                   "👉 https://mistmare.ru";
 
-            // Данные сообщения и ID группы переводим в чистую строку без использования FormUrlEncodedContent
+            // 2. Сборка параметров запроса
+            string requestUri = "https://vk.com" +
+                                "?v=5.131" +
+                                "&access_token=" + cleanToken;
+
             var postDataString = "owner_id=-" + cleanGroup +
                                  "&from_group=1" +
                                  "&message=" + Uri.EscapeDataString(finalPostText);
 
-            // Инициализируем полностью изолированный клиент БЕЗ BaseAddress
             var handler = new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false };
             using var isolatedClient = new HttpClient(handler);
-
-            // Маскируем запрос под обычный браузер
             isolatedClient.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
 
             var content = new StringContent(postDataString, Encoding.UTF8, "application/x-www-form-urlencoded");
 
-            // КРИТИЧЕСКИЙ ФИКС: Принудительно вычисляем длину контента в байтах.
-            // Наличие заголовка Content-Length автоматически отключает chunked-кодирование в .NET 8!
             byte[] postBytes = Encoding.UTF8.GetBytes(postDataString);
             content.Headers.ContentLength = postBytes.Length;
 
-            // Создаем сам запрос
-            var request = new HttpRequestMessage(HttpMethod.Post, new Uri(fullUrl))
-            {
-                Content = content
-            };
-
-            // Отправляем запрос через изолированный клиент
+            var request = new HttpRequestMessage(HttpMethod.Post, new Uri(requestUri)) { Content = content };
             var wallResponse = await isolatedClient.SendAsync(request);
 
-            // Читаем ответ как массив байт для обхода проблем с BOM и кодировками ВК
             byte[] responseBytes = await wallResponse.Content.ReadAsByteArrayAsync();
             string wallResultString = Encoding.UTF8.GetString(responseBytes).Trim();
+            wallResultString = wallResultString.Trim(new char[] { '\uFEFF', '\u200B', ' ', '\n', '\r', '\t' });
 
-            // 3. ЖЕСТКАЯ ДИАГНОСТИКА: Если ВК вернул HTML — пишем его весь на диск для анализа
             if (string.IsNullOrEmpty(wallResultString) || wallResultString.StartsWith("<"))
             {
                 string debugFilePath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "vk_error_page.html");
                 await System.IO.File.WriteAllTextAsync(debugFilePath, wallResultString ?? "Empty response", Encoding.UTF8);
-
-                throw new Exception("ВК вернул HTML-страницу вместо JSON. Полный код ответа сохранен в файл: " + debugFilePath);
+                throw new Exception("ВК вернул HTML-страницу. Код ответа сохранен в файл: " + debugFilePath);
             }
 
             using var wallDoc = JsonDocument.Parse(wallResultString);
@@ -111,7 +106,7 @@ public class VkPublisherService : IPublisherService
                 throw new Exception("VK API Error (wall.post) [Код " + errCode + "]: " + errMsg);
             }
 
-            _logger.LogInformation("✅ [VK] Пост успешно опубликован на стену группы " + cleanGroup + "!");
+            _logger.LogInformation("✅ [VK] Анонс статьи успешно опубликован на стену группы " + cleanGroup + "!");
             return true;
         }
         catch (Exception ex)
