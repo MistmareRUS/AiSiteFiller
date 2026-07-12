@@ -103,7 +103,12 @@ public class VkPublisherService : IPublisherService
                             var saveResponse = await isolatedClient.PostAsync(savePhotoUri, null);
                             string saveResultStr = Encoding.UTF8.GetString(await saveResponse.Content.ReadAsByteArrayAsync()).Trim();
 
+                            // ЖЕЛЕЗНЫЙ ДЕБАГ: Принудительно выбрасываем ошибку с полным сырым ответом ВК,
+                            // чтобы этот JSON вывелся на экран во всплывающем MessageBox!
+                            //throw new Exception("СЫРОЙ ОТВЕТ ВК (ШАГ В):\n\n" + saveResultStr);
+
                             using var saveDoc = JsonDocument.Parse(saveResultStr);
+
 
                             // Если на финальном шаге ВК вернул ошибку — пробрасываем её наружу для MessageBox
                             if (saveDoc.RootElement.TryGetProperty("error", out var saveErrorEl))
@@ -130,11 +135,11 @@ public class VkPublisherService : IPublisherService
                 }
             }
 
-            // 2. ФИНАЛЬНАЯ ПУБЛИКАЦИЯ НА СТЕНУ: Вызываем наш рабочий и проверенный wall.post через конкатенацию
+            // 2. ФИНАЛЬНАЯ ПУБЛИКАЦИЯ НА СТЕНУ: Вызываем wall.post через конкатенацию
             string requestUri = "https://" + "api." + "vk.com" + "/method/" + "wall.post" + "?v=5.131&access_token=" + cleanToken;
 
-            // Если картинка загрузилась, прикрепляем её через параметр attachments
-            string postDataBody = "owner_id=-" + targetGroupId + "&message=" + Uri.EscapeDataString(finalPostText);
+            // ЖЕЛЕЗНЫЙ ФИКС: Обязательно добавляем &from_group=1, чтобы пост вышел от лица паблика, а не от вашего имени!
+            string postDataBody = "owner_id=-" + targetGroupId + "&from_group=1&message=" + Uri.EscapeDataString(finalPostText);
             if (!string.IsNullOrEmpty(attachmentsId))
             {
                 postDataBody = postDataBody + "&attachments=" + attachmentsId;
