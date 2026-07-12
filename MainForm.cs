@@ -2,13 +2,10 @@
 using AiSiteFiller.Domain.Entities;
 using AiSiteFiller.Infrastructure.Data;
 using AiSiteFiller.Infrastructure.Services;
-using DnsClient.Internal;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using System.ComponentModel;
 using System.Data;
-using System.Drawing.Printing;
 using ILoggerFactory = Microsoft.Extensions.Logging.ILoggerFactory;
 using Label = System.Windows.Forms.Label;
 using LogLevel = Microsoft.Extensions.Logging.LogLevel;
@@ -127,7 +124,7 @@ public class MainForm : Form
             SelectionMode = DataGridViewSelectionMode.FullRowSelect,
             Location = new Point(20, 95),
             Size = new Size(600, 340),
-            Anchor = AnchorStyles.Top | AnchorStyles.Left,
+            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
         };
         _taskGrid.CellDoubleClick += TaskGrid_CellDoubleClick;
 
@@ -140,7 +137,7 @@ public class MainForm : Form
             ScrollBars = ScrollBars.Vertical,
             BackColor = Color.FromArgb(20, 20, 20),
             ForeColor = Color.LightGreen,
-            Font = new Font("Consolas", 9.5f)
+            Font = new Font("Consolas", 9.5f),
         };
 
 
@@ -156,7 +153,7 @@ public class MainForm : Form
             RowHeadersVisible = false,
             SelectionMode = DataGridViewSelectionMode.FullRowSelect,
             MultiSelect = false,
-            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
+            Anchor = AnchorStyles.Top | AnchorStyles.Right
         };
 
         _taskGrid.SelectionChanged += DgvTasks_SelectionChanged;
@@ -168,7 +165,8 @@ public class MainForm : Form
             Text = "◀",
             Location = new Point(20, 440), // Строго под левым нижним углом _taskGrid
             Size = new Size(40, 25),
-            BackColor = Color.LightGray
+            BackColor = Color.LightGray,
+            Anchor = AnchorStyles.Top | AnchorStyles.Left
         };
         btnPrevPage.Click += async (s, e) =>
         {
@@ -186,7 +184,8 @@ public class MainForm : Form
             Text = "Страница: 1 из 1",
             Location = new Point(70, 444),
             Size = new Size(250, 20),
-            Font = new Font("Segoe UI", 9, FontStyle.Bold)
+            Font = new Font("Segoe UI", 9, FontStyle.Bold),
+            Anchor = AnchorStyles.Top | AnchorStyles.Left
         };
 
         // Кнопка "Вперед"
@@ -195,7 +194,8 @@ public class MainForm : Form
             Text = "▶",
             Location = new Point(240, 440), // Чуть правее метки
             Size = new Size(40, 25),
-            BackColor = Color.LightGray
+            BackColor = Color.LightGray,
+            Anchor = AnchorStyles.Top | AnchorStyles.Left
         };
         btnNextPage.Click += async (s, e) =>
         {
@@ -211,7 +211,7 @@ public class MainForm : Form
         this.Controls.Add(btnPrevPage);
         this.Controls.Add(lblPageInfo);
         this.Controls.Add(btnNextPage);
-        this.Controls.Add(_logTextBox); // Добавляем лог-бокс ПОСЛЕ кнопок, чтобы Dock не ломал геометрию
+        this.Controls.Add(_logTextBox);
         this.Controls.Add(topPanel);
 
         btnPrevPage.BringToFront();
