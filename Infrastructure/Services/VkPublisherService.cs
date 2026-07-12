@@ -103,21 +103,25 @@ public class VkPublisherService : IPublisherService
                             var saveResponse = await isolatedClient.PostAsync(savePhotoUri, null);
                             string saveResultStr = Encoding.UTF8.GetString(await saveResponse.Content.ReadAsByteArrayAsync()).Trim();
 
-                            _logger.LogInformation("[VK Дебаг ШАГ В]: " + saveResultStr); // Выводим ответ шага В
-
                             using var saveDoc = JsonDocument.Parse(saveResultStr);
+
+                            // Если на финальном шаге ВК вернул ошибку — пробрасываем её наружу для MessageBox
                             if (saveDoc.RootElement.TryGetProperty("error", out var saveErrorEl))
                             {
-                                string msg = saveErrorEl.GetProperty("error_msg").GetString() ?? "";
-                                _logger.LogWarning("[VK Дебаг Ошибка сохранения]: " + msg);
+                                string msg = saveErrorEl.GetProperty("error_msg").GetString() ?? "Unknown";
+                                int code = saveErrorEl.GetProperty("error_code").GetInt32();
+                                throw new Exception("Ошибка photos.saveWallPhoto [Код " + code + "]: " + msg + "\nОтвет сервера: " + saveResultStr);
                             }
 
                             if (saveDoc.RootElement.TryGetProperty("response", out var saveResponseArray) && saveResponseArray.GetArrayLength() > 0)
                             {
-                                var savedPhotoEl = saveResponseArray[0]; // Извлекаем первый элемент
+                                // ЖЕЛЕЗНЫЙ ФИКС: Достаем первый элемент массива через индексатор JsonElement!
+                                var savedPhotoEl = saveResponseArray[0];
+
                                 long ownerId = savedPhotoEl.GetProperty("owner_id").GetInt64();
                                 long photoId = savedPhotoEl.GetProperty("id").GetInt64();
 
+                                // Формируем итоговый attachment-строковый ID для wall.post
                                 attachmentsId = "photo" + ownerId + "_" + photoId;
                                 _logger.LogInformation("✅ [VK] Обложка успешно импортирована! Медиа-ID: " + attachmentsId);
                             }
