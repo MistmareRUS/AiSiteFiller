@@ -218,9 +218,11 @@ public class VkPublisherService : IPublisherService
             string wallResultString = Encoding.UTF8.GetString(responseBytes).Trim();
             wallResultString = wallResultString.Trim(new char[] { '\uFEFF', '\u200B', ' ', '\n', '\r', '\t' });
 
+#if DEBUG            
             // Дамп-лог для подстраховки
-            string debugFilePath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "vk_error_page.html");
+            string debugFilePath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "vk_error_page.txt");
             await System.IO.File.WriteAllTextAsync(debugFilePath, wallResultString, Encoding.UTF8);
+#endif
 
             if (wallResultString.StartsWith("<"))
             {

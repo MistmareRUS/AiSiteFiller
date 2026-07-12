@@ -31,6 +31,8 @@ public class MainForm : Form
 
     private CancellationTokenSource? _cts;
     private readonly IConfiguration _configuration;
+    private readonly IFileStorageService _mongoDbStorageService;
+
     private ILoggerFactory _loggerFactory = null!;
 
 
@@ -44,6 +46,7 @@ public class MainForm : Form
         _configuration = configuration;
         InitializeComponent();
         InitializeDependencies();
+        _mongoDbStorageService = new MongoDbStorageService(_configuration, _loggerFactory.CreateLogger<MongoDbStorageService>());
 
         // Добавьте эту строчку, чтобы безопасно освобождать память СУБД и логов
         this.FormClosed += (s, e) => _loggerFactory?.Dispose();
@@ -191,192 +194,163 @@ public class MainForm : Form
     }
 
 
-    private async Task WorkerProcessLoopAsync(CancellationToken token)
+    private async Task WorkerProcessLoopAsync(System.Threading.CancellationToken cancellationToken)
     {
-        try
+        Invoke(() => LogToUi("🚀 Фоновая служба конвейера подзадач запущена. Ожидаю очереди..."));
+
+        while (!cancellationToken.IsCancellationRequested)
         {
-            using (var db = new AppDbContext())
+            try
             {
-                Invoke(() => LogToUi("⚙️ Синхронизация структуры базы данных PostgreSQL через EF Core..."));
-                await db.Database.MigrateAsync(token);
+                PublicationTask? pubTask = null;
 
-                // Автоматический сброс упавших задач обратно в очередь (только для режима отладки)
-#if DEBUG
-                Invoke(() => LogToUi("[DEBUG] Автоматический сброс задач из статуса Failed в Pending..."));
-                var failedTasks = await db.ArticlesQueue
-                    .Where(t => t.Status == Domain.Enums.TaskStatus.Failed)
-                    .ToListAsync(token);
-
-                if (failedTasks.Any())
-                {
-                    foreach (var failedTask in failedTasks)
-                    {
-                        failedTask.Status = Domain.Enums.TaskStatus.Pending;
-                    }
-                    await db.SaveChangesAsync(token);
-                    Invoke(() => LogToUi($"[DEBUG] Успешно возвращено в очередь задач: {failedTasks.Count} шт."));
-                }
-#endif
-
-                Invoke(RefreshGrid);
-
-                if (!await db.ArticlesQueue.AnyAsync(token))
-                {
-                    Invoke(() => LogToUi("Queue is empty. AI is planning starting topics..."));
-                    await _contentPlanner.PopulateQueueWithTrendingTopicsAsync(Domain.Constants.AppCategories.SmartHome, 3);
-                    await _contentPlanner.PopulateQueueWithTrendingTopicsAsync(Domain.Constants.AppCategories.Smartphones, 3);
-                    Invoke(RefreshGrid);
-                }
-            }
-
-
-
-            while (!token.IsCancellationRequested)
-            {
+                // 1. Берем ОДНУ конкретную подзадачу (например, только для VK или только для WP)
                 using (var db = new AppDbContext())
                 {
-                    // Ищем задачу в Postgres
-                    var task = await db.ArticlesQueue
-                        .Where(t => t.Status == Domain.Enums.TaskStatus.Pending)
-                        .OrderBy(t => t.Id)
-                        .FirstOrDefaultAsync(token);
+                    pubTask = await db.GetNextPendingPublicationTaskAsync();
+                }
 
-                    if (task != null)
+                if (pubTask == null)
+                {
+                    Invoke(() => LogToUi("💤 В очереди нет подзадач со статусом Pending. Засыпаю на 30 секунд..."));
+                    await Task.Delay(30000, cancellationToken);
+                    continue;
+                }
+
+                // Извлекаем родительскую статью, к которой привязана эта публикация
+                var articleTask = pubTask.ArticleTask;
+                Invoke(() => LogToUi($"⚡ Взята подзадача #{pubTask.Id} для платформы [{pubTask.Platform}] (Статья #{articleTask.Id}: \"{articleTask.Topic}\")"));
+
+                string articleHtml = articleHtml = articleTask.ContentHtml ?? string.Empty;
+                byte[]? imageBytes = null;
+
+                // 2. УМНЫЙ ТЕКСТОВЫЙ КЭШ: Если текст статьи в родительской записи пуст — генерируем через ИИ
+                if (string.IsNullOrEmpty(articleHtml))
+                {
+                    Invoke(() => LogToUi("📝 [ИИ] Генерирую новый HTML-текст статьи через ProxyAPI..."));
+                    articleHtml = await _aiService.GenerateArticleAsync(articleTask.Topic);
+
+                    // Кэшируем текст в родительскую запись в Postgres
+                    articleTask.ContentHtml = articleHtml;
+                    using (var dbContext = new AppDbContext())
                     {
-                        Invoke(() => LogToUi($"⚡ Взята задача #{task.Id}: \"{task.Topic}\""));
+                        dbContext.ArticlesQueue.Update(articleTask);
+                        await dbContext.SaveChangesAsync();
+                    }
+                    Invoke(() => LogToUi($"Статья #{articleTask.Id} успешно заархивирована в локальный Postgres."));
+                }
+                else
+                {
+                    Invoke(() => LogToUi("♻️ [Архив] Обнаружен готовый текст статьи. Пропускаю вызов Текстового ИИ."));
+                }
 
-                        task.Status = Domain.Enums.TaskStatus.Processing;
-                        await db.SaveChangesAsync(token);
-                        Invoke(RefreshGrid);
-
-                        try
+                // 3. УМНЫЙ ГРАФИЧЕСКИЙ КЭШ: Если картинка еще не создавалась — дергаем Stable Diffusion
+                if (string.IsNullOrEmpty(articleTask.MongoImageId))
+                {
+                    Invoke(() => LogToUi("🎨 [Локальный ИИ] Создаю уникальную нейроиллюстрацию в Stable Diffusion..."));
+                    try
+                    {
+                        string base64Image = await _aiService.GenerateImageAsync(articleTask.Topic);
+                        if (!string.IsNullOrEmpty(base64Image))
                         {
-                            string articleHtml = string.Empty;
-                            byte[]? imageBytes = null;
+                            imageBytes = Convert.FromBase64String(base64Image);
 
-                            if (string.IsNullOrEmpty(task.ContentHtml))
+                            // Сохраняем обложку в MongoDB GridFS через ваш реальный метод SaveFileAsync
+                            string mongoId = await _mongoDbStorageService.SaveFileAsync(imageBytes, $"{articleTask.Id}_cover.jpg", articleTask.Category ?? "");
+                            articleTask.MongoImageId = mongoId;
+
+                            using (var dbContext = new AppDbContext())
                             {
-                                Invoke(() => LogToUi("📝 [ИИ] Генерирую новый HTML-текст статьи через ProxyAPI..."));
-                                articleHtml = await _aiService.GenerateArticleAsync(task.Topic);
-
-                                task.ContentHtml = articleHtml;
-                                db.ArticlesQueue.Update(task);
-                                await db.SaveChangesAsync();
-                                Invoke(() => LogToUi($"Статья #{task.Id} успешно заархивирована в локальный Postgres."));
+                                dbContext.ArticlesQueue.Update(articleTask);
+                                await dbContext.SaveChangesAsync();
                             }
-                            else
-                            {
-                                Invoke(() => LogToUi("♻️ [Архив] Обнаружен готовый текст статьи. Пропускаю вызов Текстового ИИ."));
-                                articleHtml = task.ContentHtml;
-                            }
-
-                            IFileStorageService mongoStorage = new MongoDbStorageService(_configuration, _loggerFactory.CreateLogger<MongoDbStorageService>());
-                            if (string.IsNullOrEmpty(task.MongoImageId))
-                            {
-                                Invoke(() => LogToUi("🎨 [Локальный ИИ] Создаю уникальную нейроиллюстрацию в Stable Diffusion..."));
-                                try
-                                {
-                                    string base64Image = await _aiService.GenerateImageAsync(task.Topic);
-                                    if (!string.IsNullOrEmpty(base64Image))
-                                    {
-                                        imageBytes = Convert.FromBase64String(base64Image);
-
-                                        // Вызываем ваш метод со скриншота: SaveFileAsync
-                                        string mongoId = await mongoStorage.SaveFileAsync(imageBytes, $"{task.Id}_cover.jpg", task.Category ?? "");
-                                        task.MongoImageId = mongoId;
-
-                                        using (var dbContext = new AppDbContext())
-                                        {
-                                            dbContext.ArticlesQueue.Update(task);
-                                            await dbContext.SaveChangesAsync();
-                                        }
-                                        Invoke(() => LogToUi("💾 [Медиа-Архив] Обложка успешно сохранена в MongoDB GridFS."));
-                                    }
-                                }
-                                catch (Exception imgEx)
-                                {
-                                    Invoke(() => LogToUi("⚠️ Сбой обработки картинки (пропускаю): " + imgEx.Message));
-                                }
-                            }
-                            else
-                            {
-                                Invoke(() => LogToUi("♻️ [Архив] Обложка этой статьи уже есть в MongoDB. Выкачиваю байты для рассылки..."));
-
-                                // ЖЕЛЕЗНЫЙ ФИКС: Вместо пустого массива выгружаем реальные байты картинки из Монго для ВК!
-                                imageBytes = await mongoStorage.GetFileAsync(task.MongoImageId);
-                            }
-
-                            await db.SaveChangesAsync();
-
-                            // Дальше без изменений продолжается ваш родной цикл веерной рассылки
-                            Invoke(() => LogToUi("🚀 [Веерный конвейер] Запускаю автоматическую рассылку по всем платформам..."));
-
-                            int successCount = 0;
-
-                            foreach (var publisher in _publishers)
-                            {
-                                try
-                                {
-                                    bool isPublished = await publisher.PublishAsync(task.Topic, articleHtml, task.Category, task.SiteId, imageBytes);
-                                    if (isPublished) successCount++;
-                                }
-                                catch (Exception pubEx)
-                                {
-                                    // Безопасно выводим ошибку на экран в главном UI-потоке, не прерывая работу робота
-                                    this.BeginInvoke(new Action(() => {
-                                        LogToUi("⚠️ Сбой платформы публикации: " + pubEx.Message);
-
-                                        // Выводим развернутое модальное окно с детальным текстом ошибки ВК
-                                        MessageBox.Show(
-                                            $"Внимание! Произошел сбой при веерной рассылке:\n\n{pubEx.Message}",
-                                            "Детальный лог ошибки конвейера",
-                                            MessageBoxButtons.OK,
-                                            MessageBoxIcon.Warning
-                                        );
-                                    }));
-                                }
-                            }
-
-                            task.Status = (successCount > 0) ? Domain.Enums.TaskStatus.Published : Domain.Enums.TaskStatus.Failed;
-
-
-                            Invoke(new Action(() => LogToUi(task.Status == Domain.Enums.TaskStatus.Published
-                                ? "✅ Статья успешно разлетелась по медиа-каналам (" + successCount + "/" + _publishers.Count + " успешно)!"
-                                : "❌ Все платформы отклонили запрос. Текст сохранен в архив Postgres.")));
-
+                            Invoke(() => LogToUi("💾 [Медиа-Архив] Обложка успешно сохранена в MongoDB GridFS."));
                         }
+                    }
+                    catch (Exception imgEx)
+                    {
+                        Invoke(() => LogToUi("⚠️ Сбой обработки картинки (пропускаю): " + imgEx.Message));
+                    }
+                }
+                else
+                {
+                    Invoke(() => LogToUi("♻️ [Архив] Обложка этой статьи уже есть в MongoDB. Выкачиваю байты для рассылки..."));
+                    // Выкачиваем оригинальные байты картинки из GridFS для текущей публикации
+                    imageBytes = await _mongoDbStorageService.GetFileAsync(articleTask.MongoImageId);
+                }
 
-                        catch (Exception ex)
-                        {
-                            Invoke(new Action(() => LogToUi("Критическая ошибка: " + ex.Message)));
-                            Invoke(new Action(() => LogToUi("Стек ошибки: " + ex.StackTrace)));
-                            task.Status = Domain.Enums.TaskStatus.Failed;
-                        }
+                // 4. АДРЕСНАЯ ПУБЛИКАЦИЯ: Вместо цикла foreach отправляем строго на целевую платформу подзадачи
+                bool isSuccess = false;
+                string executionError = string.Empty;
 
+                try
+                {
+                    IPublisherService? targetPublisher = null;
 
-                        await db.SaveChangesAsync(token);
-                        Invoke(RefreshGrid);
+                    // Определяем, какой именно сервис из полиморфного списка нам нужен
+                    if (pubTask.Platform.Equals("WordPress", StringComparison.OrdinalIgnoreCase))
+                    {
+                        targetPublisher = _publishers.Find(p => p is WordPressPublisherService);
+                    }
+                    else if (pubTask.Platform.Equals("VK", StringComparison.OrdinalIgnoreCase))
+                    {
+                        targetPublisher = _publishers.Find(p => p is VkPublisherService);
+                    }
+
+                    if (targetPublisher != null)
+                    {
+                        Invoke(() => LogToUi($"🚀 Отправляю публикацию в [{pubTask.Platform}]..."));
+                        isSuccess = await targetPublisher.PublishAsync(articleTask.Topic, articleHtml, articleTask.Category, articleTask.SiteId, imageBytes);
                     }
                     else
                     {
-                        Invoke(() => LogToUi("🔄 В очереди нет задач. Ожидание..."));
+                        throw new Exception($"Не найден зарегистрированный сервис для платформы {pubTask.Platform}");
                     }
                 }
+                catch (Exception pubEx)
+                {
+                    executionError = pubEx.Message;
 
-                // Интервал фонового сна (например, 20 секунд для теста работы)
-                await Task.Delay(TimeSpan.FromSeconds(20), token);
+                    // Контролируемый вывод всплывающего окна без падения фонового потока
+                    this.BeginInvoke(new Action(() => {
+                        LogToUi($"⚠️ Сбой публикации на платформу [{pubTask.Platform}]: " + pubEx.Message);
+                        MessageBox.Show(
+                            $"Сбой публикации на платформу [{pubTask.Platform}]:\n\n{pubEx.Message}",
+                            "Информация конвейера подзадач",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Warning
+                        );
+                    }));
+                }
+
+                // 5. ФИКСИРУЕМ РЕЗУЛЬТАТ: Обновляем статус строго для текущей подзадачи
+                using (var dbContext = new AppDbContext())
+                {
+                    pubTask.Status = isSuccess ? Domain.Enums.TaskStatus.Published : Domain.Enums.TaskStatus.Failed;
+                    pubTask.ProcessedAt = DateTime.UtcNow;
+                    pubTask.ErrorMessage = isSuccess ? null : executionError;
+
+                    dbContext.PublicationTasks.Update(pubTask);
+                    await dbContext.SaveChangesAsync();
+                }
+
+                Invoke(() => LogToUi(isSuccess
+                    ? $"✅ Подзадача #{pubTask.Id} [{pubTask.Platform}] успешно завершена!"
+                    : $"❌ Подзадача #{pubTask.Id} [{pubTask.Platform}] провалена. Ошибка занесена в лог базы."));
+
+                // Обновляем визуальную сетку DataGridView
+                Invoke(RefreshGrid);
             }
-        }
-        catch (TaskCanceledException)
-        {
-            Invoke(() =>
+            catch (Exception ex)
             {
-                _lblStatus.Text = "Статус: Робот остановлен";
-                _lblStatus.ForeColor = Color.Gray;
-                LogToUi("🛑 Работа конвейера принудительно остановлена пользователем.");
-            });
+                Invoke(() => LogToUi($"💥 Критическая ошибка цикла конвейера: {ex.Message}"));
+            }
+
+            // Небольшая технологическая пауза перед следующей подзадачей
+            await Task.Delay(5000, cancellationToken);
         }
     }
+
 
     private void RefreshGrid()
     {

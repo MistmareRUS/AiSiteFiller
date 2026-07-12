@@ -16,4 +16,7 @@ public class ArticleTask
 
     public TaskStatus Status { get; set; } = TaskStatus.Pending;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+
+    public virtual ICollection<PublicationTask> PublicationTasks { get; set; } = new List<PublicationTask>();
+
 }
