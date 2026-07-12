@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System.Data;
+using System.Drawing.Printing;
 using ILoggerFactory = Microsoft.Extensions.Logging.ILoggerFactory;
 using Label = System.Windows.Forms.Label;
 using LogLevel = Microsoft.Extensions.Logging.LogLevel;
@@ -98,16 +99,31 @@ public class MainForm : Form
         _cmbStatusFilter.Items.AddRange(new object[] { "Все статусы", "Pending", "Processing", "Published", "Failed" });
         _cmbStatusFilter.SelectedIndex = 0;
         _cmbStatusFilter.SelectedIndexChanged += ApplyFiltersAndSorting;
+        _cmbStatusFilter.SelectedIndexChanged += async (s, e) =>
+        {
+            _currentPage = 1;
+            await RefreshGridAsync();
+        };
 
         _cmbSiteFilter = new ComboBox { Location = new Point(235, 58), Size = new Size(130, 25), DropDownStyle = ComboBoxStyle.DropDownList };
         _cmbSiteFilter.Items.AddRange(new object[] { "Все сайты", "tech-info", "vk-group" });
         _cmbSiteFilter.SelectedIndex = 0;
         _cmbSiteFilter.SelectedIndexChanged += ApplyFiltersAndSorting;
+        _cmbSiteFilter.SelectedIndexChanged += async (s, e) =>
+        {
+            _currentPage = 1;
+            await RefreshGridAsync();
+        };
 
         _cmbCategoryFilter = new ComboBox { Location = new Point(380, 58), Size = new Size(160, 25), DropDownStyle = ComboBoxStyle.DropDownList };
         _cmbCategoryFilter.Items.AddRange(new object[] { "Все категории", "smart-home", "smartphones", "audio", "gadgets" });
         _cmbCategoryFilter.SelectedIndex = 0;
         _cmbCategoryFilter.SelectedIndexChanged += ApplyFiltersAndSorting;
+        _cmbCategoryFilter.SelectedIndexChanged += async (s, e) =>
+        {
+            _currentPage = 1;
+            await RefreshGridAsync();
+        };
 
         topPanel.Controls.Add(_cmbStatusFilter);
         topPanel.Controls.Add(_cmbSiteFilter);
@@ -261,7 +277,7 @@ public class MainForm : Form
         }
 
         LogToUi("Система инициализирована. Ожидание запуска...");
-        _ = RefreshGridAsync();
+        this.Load += async (s, e) => await RefreshGridAsync();
     }
 
     private void BtnStart_Click(object? sender, EventArgs e)
@@ -599,18 +615,54 @@ public class MainForm : Form
         {
             using var db = new AppDbContext();
 
-            // 1. Считаем общее количество записей в PostgreSQL для вычисления страниц
-            int totalItems = await db.ArticlesQueue.CountAsync();
+            // Создаем базовый LINQ-запрос к таблице статей
+            var query = db.ArticlesQueue.AsQueryable();
 
-            // Вычисляем максимальное число страниц (минимум 1, если база пустая)
+            string selectedStatus = "Все статусы";
+            string selectedSite = "Все сайты";
+            string selectedCategory = "Все категории";
+
+            // ЖЕЛЕЗНЫЙ ФИКС: Обращаемся к комбобоксам только если окно Windows уже создано!
+            if (this.IsHandleCreated)
+            {
+                this.Invoke(new Action(() =>
+                {
+                    selectedStatus = _cmbStatusFilter.SelectedItem?.ToString() ?? "Все статусы";
+                    selectedSite = _cmbSiteFilter.SelectedItem?.ToString() ?? "Все сайты";
+                    selectedCategory = _cmbCategoryFilter.SelectedItem?.ToString() ?? "Все категории";
+                }));
+            }
+
+            // Фильтрация по статусу подзадачи веера
+            if (selectedStatus != "Все статусы")
+            {
+                if (Enum.TryParse<Domain.Enums.TaskStatus>(selectedStatus, out var statusEnum))
+                {
+                    query = query.Where(a => a.PublicationTasks.Any(p => p.Status == statusEnum));
+                }
+            }
+
+            // ПРИМЕНЯЕМ ФИЛЬТР ПО САЙТУ
+            if (selectedSite != "Все сайты")
+            {
+                query = query.Where(a => a.SiteId == selectedSite);
+            }
+
+            // ПРИМЕНЯЕМ ФИЛЬТР ПО КАТЕГОРИИ
+            if (selectedCategory != "Все категории")
+            {
+                query = query.Where(a => a.Category == selectedCategory);
+            }
+
+            // Считаем количество элементов С УЧЕТОМ наложенных фильтров для пагинации
+            int totalItems = await query.CountAsync();
+
             _totalPages = (int)Math.Ceiling((double)totalItems / _pageSize);
             if (_totalPages < 1) _totalPages = 1;
-
-            // Страховка от вылета за границы
             if (_currentPage > _totalPages) _currentPage = _totalPages;
 
-            // 2. Выкачиваем пачку строго для текущей страницы с помощью Skip и Take
-            var articles = await db.ArticlesQueue
+            // Выкачиваем отфильтрованную и отсортированную пачку данных для текущей страницы
+            var articles = await query
                 .OrderByDescending(a => a.Id)
                 .Skip((_currentPage - 1) * _pageSize)
                 .Take(_pageSize)
@@ -624,25 +676,28 @@ public class MainForm : Form
                 })
                 .ToListAsync();
 
-            // 3. Безопасно обновляем элементы управления в UI-потоке WinForms
-            this.BeginInvoke(new Action(() =>
+            // Безопасно обновляем элементы управления на форме
+            if (this.IsHandleCreated)
             {
-                // Заливаем данные в ваш реальный левый грид задач
-                _taskGrid.DataSource = articles;
-
-                // Находим добавленную метку и обновляем текст страниц
-                if (this.Controls.Find("lblPageInfo", true).FirstOrDefault() is Label pageLabel)
+                this.BeginInvoke(new Action(() =>
                 {
-                    pageLabel.Text = $"Страница: {_currentPage} из {_totalPages} (Всего: {totalItems})";
-                }
+                    _taskGrid.DataSource = articles;
 
-                // Принудительно заставляем правую панель подзадач dgvDetails обновиться для первой строки пачки
-                DgvTasks_SelectionChanged(null, EventArgs.Empty);
-            }));
+                    if (this.Controls.Find("lblPageInfo", true).FirstOrDefault() is Label pageLabel)
+                    {
+                        pageLabel.Text = $"Страница: {_currentPage} из {_totalPages} (Найдено: {totalItems})";
+                    }
+
+                    DgvTasks_SelectionChanged(null, EventArgs.Empty);
+                }));
+            }
         }
         catch (Exception ex)
         {
-            this.BeginInvoke(new Action(() => LogToUi($"💥 Ошибка асинхронного обновления таблицы: {ex.Message}")));
+            if (this.IsHandleCreated)
+            {
+                this.BeginInvoke(new Action(() => LogToUi($"💥 Ошибка фильтрации таблицы: {ex.Message}")));
+            }
         }
     }
 
