@@ -138,8 +138,8 @@ public class MainForm : Form
         // Настройка таблицы детализации подзадач веера
         dgvDetails = new DataGridView
         {
-            Location = new Point(540, 45), // Аккуратно встает справа от _dgv с отступом 20px
-            Size = new Size(420, 480),     // Занимает всю правую часть экрана
+            Location = new Point(530, 95), // Аккуратно встает справа от _dgv с отступом 20px
+            Size = new Size(420, 240),     // Занимает всю правую часть экрана
             AllowUserToAddRows = false,
             AllowUserToDeleteRows = false,
             ReadOnly = true,
@@ -147,7 +147,8 @@ public class MainForm : Form
             RowHeadersVisible = false,
             SelectionMode = DataGridViewSelectionMode.FullRowSelect,
             MultiSelect = false,
-            Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right
+            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+            AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
         };
 
         // КРИТИЧЕСКИЙ ШАГ: Подписываемся на событие клика по строке главной таблицы статей
