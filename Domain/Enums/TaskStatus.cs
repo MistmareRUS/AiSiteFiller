@@ -2,9 +2,9 @@
 
 public enum TaskStatus
 {
-    Paused,
-    Pending,
-    Processing,
-    Published,
-    Failed
+    Pending = 0,
+    Processing = 1,
+    Published = 2,
+    Failed = 3,
+    Paused = 4,
 }
