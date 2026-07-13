@@ -7,6 +7,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System.Data;
 using System.Drawing.Printing;
+using System.Security.Policy;
 using ILoggerFactory = Microsoft.Extensions.Logging.ILoggerFactory;
 using Label = System.Windows.Forms.Label;
 using LogLevel = Microsoft.Extensions.Logging.LogLevel;
@@ -259,7 +260,8 @@ public class MainForm : Form
         _publishers = new List<IPublisherService>
         {
             new WordPressPublisherService(_configuration, _loggerFactory.CreateLogger<WordPressPublisherService>()),
-            new VkPublisherService(_configuration, _loggerFactory.CreateLogger<VkPublisherService>())
+            new VkPublisherService(_configuration, _loggerFactory.CreateLogger<VkPublisherService>()),
+            new OkPublisherService(_configuration, _loggerFactory.CreateLogger<OkPublisherService>()),
             // Сюда в будущем в одну строчку добавятся: new TelegramPublisherService(...), new DzenPublisherService(...)
         };
 
@@ -442,6 +444,12 @@ public class MainForm : Form
                     else if (pubTask.Platform.Equals("VK", StringComparison.OrdinalIgnoreCase))
                     {
                         targetPublisher = _publishers.Find(p => p is VkPublisherService);
+                    }
+                    else if (pubTask.Platform == "OK")
+                    {
+                        // 🔥 НАШ НОВЫЙ ВЫЗОВ ОДНОКЛАССНИКОВ:
+                        // Передаем тему, HTML статьи (из которого наш парсер сделает текстовую таблицу) и ID сайта
+                        targetPublisher = _publishers.Find(p => p is OkPublisherService);
                     }
 
                     if (targetPublisher != null)
