@@ -106,8 +106,14 @@ public class VkPublisherService : IPublisherService
             // Вырезаем все остаточные теги
             cleanText = System.Text.RegularExpressions.Regex.Replace(cleanText, @"<[^>]*>", "");
 
-            string finalPostText = "📰 " + title.ToUpper() + "\n\n" + cleanText;
+            // 3. УМНАЯ СРАБОТКА CPA-КОНВЕЙЕРА ДЛЯ ВК: Формируем красивую маскированную ссылку
+            string domainId = "tech-info"; // Наш рабочий поддомен
+            string maskedCpaUrl = Application.Helpers.CpaLinkHelper.GenerateMaskedVkLink(title, domainId);
 
+            // Склеиваем сочный продающий текст анонса для умной ленты ВК по договору конкатенации
+            string finalPostText = "📰 " + title.ToUpper() + "\n\n" +
+                                   cleanText + "\n\n" +
+                                   "🚀 Читать полный обзор и сравнить актуальные цены: " + maskedCpaUrl;
 
             string targetGroupId = cleanGroup.Replace("-", "").Trim();
             string attachmentsId = string.Empty;
