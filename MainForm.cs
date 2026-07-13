@@ -411,6 +411,19 @@ public class MainForm : Form
                     if (targetPublisher != null)
                     {
                         Invoke(() => LogToUi($"🚀 Отправляю публикацию в [{pubTask.Platform}]..."));
+
+                        // 1. Вытягиваем наш живой партнерский ID из конфига appsettings.local.json
+                        string activeClid = _configuration["CpaOptions:CpaClid"] ?? string.Empty;
+
+                        // 2. Передаем его третьим аргументом в умный CPA-конвейер
+                        string cpaOptimizedHtml = AiSiteFiller.Application.Helpers.CpaLinkHelper.ReplacePlaceholdersWithSmartLinks(articleHtml, articleTask.Topic, activeClid);
+
+                        if (targetPublisher != null)
+                        {
+                            Invoke(() => LogToUi($"🚀 Отправляю публикацию в [{pubTask.Platform}] с умными CPA-ссылками из конфига..."));
+                            isSuccess = await targetPublisher.PublishAsync(articleTask.Topic, cpaOptimizedHtml, articleTask.Category, articleTask.SiteId, imageBytes);
+                        }
+
                         isSuccess = await targetPublisher.PublishAsync(articleTask.Topic, articleHtml, articleTask.Category, articleTask.SiteId, imageBytes);
                     }
                     else
