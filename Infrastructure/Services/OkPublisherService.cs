@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Web;
 
 namespace AiSiteFiller.Infrastructure.Services;
 
@@ -70,55 +71,80 @@ public class OkPublisherService : IPublisherService
 
         string finalPostText = $"📰 {title.ToUpper()}\n\n{cleanText}\n\n🚀 Подробности: {maskedCpaUrl}";
 
-        // 3. Загрузка фото в ОК (Graph API)
-        string photoToken = "";
+        // 3. ЗАГРУЗКА ФОТО В ОК ЧЕРЕЗ КЛАССИЧЕСКИЙ REST API ГРУППЫ
+        string photoAttachmentJson = "";
         if (imageBytes?.Length > 0)
         {
             using var client = new HttpClient();
 
-            // ЖЕЛЕЗНЫЙ ФИКС: Экранируем токен, чтобы двоеточие внутри него не ломало парсер портов HttpClient
-            string escapedToken = Uri.EscapeDataString(_accessToken);
-            string uploadServerUrl = "https://" + "api." + "ok." + "ru/" + "graph/" + "me/" + "photos" + "?access_token=" + escapedToken;
+            // Шаг А: Запрашиваем URL для загрузки картинки на сервер Одноклассников
+            string getUploadUrl = "https://ok.ru" +
+                                  "?method=photosV2.getUploadUrl" +
+                                  "&gid=" + _groupId +
+                                  "&count=1" +
+                                  "&access_token=" + Uri.EscapeDataString(_accessToken);
 
-            var serverResponse = await client.PostAsync(uploadServerUrl, null);
+            // ЖЕЛЕЗНЫЙ ФИКС: Меняем PostAsync на GetAsync, чтобы сервер ОК вернул чистый JSON вместо HTML-ошибки!
+            var serverResponse = await client.GetAsync(getUploadUrl);
             var serverResponseStr = await serverResponse.Content.ReadAsStringAsync();
-            var serverData = JsonDocument.Parse(serverResponseStr);
+            using var serverData = JsonDocument.Parse(serverResponseStr);
 
-            if (serverData.RootElement.TryGetProperty("uploadUrl", out var urlEl))
+
+            // Если Одноклассники успешно выдали внутренний upload_url
+            if (serverData.RootElement.TryGetProperty("upload_url", out var urlEl))
             {
-                // Шаг Б: Загрузка файла
+                // Шаг Б: Загружаем массив байт multipart-запросом
                 using var content = new MultipartFormDataContent { { new ByteArrayContent(imageBytes), "file", "img.jpg" } };
                 var uploadResponse = await client.PostAsync(urlEl.GetString(), content);
-                var uploadData = JsonDocument.Parse(await uploadResponse.Content.ReadAsStringAsync());
+                string uploadResponseStr = await uploadResponse.Content.ReadAsStringAsync();
+                using var uploadData = JsonDocument.Parse(uploadResponseStr);
 
-                if (uploadData.RootElement.TryGetProperty("token", out var tokenEl))
-                    photoToken = tokenEl.GetString();
+                // Вытаскиваем ID и токен загруженного фото
+                if (uploadData.RootElement.TryGetProperty("photos", out var photosEl) && photosEl.GetArrayLength() > 0)
+                {
+                    var firstPhoto = photosEl[0];
+                    if (firstPhoto.TryGetProperty("token", out var tokenEl))
+                    {
+                        // Формируем блок вложения по официальной спецификации OK REST API
+                        photoAttachmentJson = "{\"type\":\"photo\",\"id\":\"" + tokenEl.GetString() + "\"}";
+                    }
+                }
             }
         }
 
-        // 4. Опубликовать медиатопик на стену группы
+        // 4. ПУБЛИКАЦИЯ МЕДИАТОПИКА С ОБЛОЖКОЙ НА СТЕНУ ГРУППЫ
         using var finalClient = new HttpClient();
-        string escapedTokenFinal = Uri.EscapeDataString(_accessToken);
-        string requestUrl = "https://" + "api." + "ok." + "ru/" + "graph/" + "me/" + "posts" + "?access_token=" + escapedTokenFinal;
+        string restRequestUrl = "https://ok.ru";
 
-
-        // Формируем JSON-структуру поста. Одноклассники принимают массив attachments
-        var postData = new
+        // Собираем медиа-блоки темы: текст статьи + блок фотографии (если она успешно загрузилась)
+        string mediaBlocksJson = "[{\"type\":\"text\",\"text\":\"" + System.Web.HttpUtility.JavaScriptStringEncode(finalPostText) + "\"}";
+        if (!string.IsNullOrEmpty(photoAttachmentJson))
         {
-            message = finalPostText,
-            attachments = photoToken != "" ? new object[] { new { type = "photo", token = photoToken } } : Array.Empty<object>()
+            mediaBlocksJson += "," + photoAttachmentJson;
+        }
+        mediaBlocksJson += "]";
+
+        // Упаковываем параметры для mediatopic.post
+        var requestParams = new System.Collections.Generic.Dictionary<string, string>
+        {
+            { "method", "mediatopic.post" },
+            { "gid", _groupId },
+            { "type", "GROUP_THEME" }, // Публикация в ленту сообщества
+            { "attachment", mediaBlocksJson },
+            { "access_token", _accessToken }
         };
 
-        var jsonContent = new StringContent(JsonSerializer.Serialize(postData), Encoding.UTF8, "application/json");
-        var response = await finalClient.PostAsync(requestUrl, jsonContent);
+        var formContent = new FormUrlEncodedContent(requestParams);
+        var response = await finalClient.PostAsync(restRequestUrl, formContent);
         string resultStr = await response.Content.ReadAsStringAsync();
 
-        if (!response.IsSuccessStatusCode)
+        if (!response.IsSuccessStatusCode || resultStr.Contains("error_code"))
         {
-            throw new Exception("Ошибка OK Graph API: " + resultStr);
+            throw new Exception("Ошибка OK REST API: " + resultStr);
         }
 
-        _logger.LogInformation("✅ [OK] Пост с обложкой успешно опубликован в группу " + _groupId + "!");
+        _logger.LogInformation("✅ [OK] Обзор с обложкой успешно опубликован на стену группы!");
         return true;
+
     }
 }
