@@ -5,7 +5,6 @@ namespace AiSiteFiller.Application.Helpers;
 
 public static class CpaLinkHelper
 {
-    // Константу убрали. Теперь clid залетает в метод динамически из appsettings!
     public static string ReplacePlaceholdersWithSmartLinks(string htmlContent, string articleTitle, string cpaClid)
     {
         if (string.IsNullOrEmpty(htmlContent) || !htmlContent.Contains("[CPA_LINK_PLACEHOLDER]"))

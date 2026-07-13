@@ -278,7 +278,41 @@ public class MainForm : Form
 
         LogToUi("Система инициализирована. Ожидание запуска...");
         this.Load += async (s, e) => await RefreshGridAsync();
+        this.Load += async (s, e) =>
+        {
+            using var db = new AppDbContext();
+            await ResetStuckTasksAsync(db);
+        };
     }
+
+
+    public async Task ResetStuckTasksAsync(AppDbContext context)
+    {
+        // 1. Сбрасываем корневую очередь задач на базе вашего Enum ArticleStatus
+        var stuckArticles = await context.ArticlesQueue
+            .Where(a => a.Status == Domain.Enums.TaskStatus.Processing || a.Status == Domain.Enums.TaskStatus.Failed)
+            .ToListAsync();
+
+        foreach (var article in stuckArticles)
+        {
+            article.Status = Domain.Enums.TaskStatus.Pending;
+        }
+
+        // 2. Сбрасываем подзадачи веера на базе вашего Enum PublicationStatus
+        var stuckPublications = await context.PublicationTasks
+            .Where(p => p.Status == Domain.Enums.TaskStatus.Processing || p.Status == Domain.Enums.TaskStatus.Failed)
+            .ToListAsync();
+
+        foreach (var pubTask in stuckPublications)
+        {
+            pubTask.Status = Domain.Enums.TaskStatus.Pending;
+            pubTask.ErrorMessage = null; // Зануляем текст старых ошибок
+        }
+
+        await context.SaveChangesAsync();
+    }
+
+
 
     private void BtnStart_Click(object? sender, EventArgs e)
     {
@@ -319,15 +353,17 @@ public class MainForm : Form
                 using (var db = new AppDbContext())
                 {
                     pubTask = await db.GetNextPendingPublicationTaskAsync();
-                }
 
-                if (pubTask == null)
-                {
-                    Invoke(() => LogToUi("💤 В очереди нет подзадач со статусом Pending. Засыпаю на 30 секунд..."));
-                    await Task.Delay(30000, cancellationToken);
-                    continue;
-                }
+                    if (pubTask == null)
+                    {
+                        Invoke(() => LogToUi("💤 В очереди нет подзадач со статусом Pending. Засыпаю на 30 секунд..."));
+                        await Task.Delay(30000, cancellationToken);
+                        continue;
+                    }
 
+                    pubTask.Status = Domain.Enums.TaskStatus.Processing;
+                    db.SaveChanges();
+                }
                 // Извлекаем родительскую статью, к которой привязана эта публикация
                 var articleTask = pubTask.ArticleTask;
                 Invoke(() => LogToUi($"⚡ Взята подзадача #{pubTask.Id} для платформы [{pubTask.Platform}] (Статья #{articleTask.Id}: \"{articleTask.Topic}\")"));
@@ -424,7 +460,7 @@ public class MainForm : Form
                             isSuccess = await targetPublisher.PublishAsync(articleTask.Topic, cpaOptimizedHtml, articleTask.Category, articleTask.SiteId, imageBytes);
                         }
 
-                        isSuccess = await targetPublisher.PublishAsync(articleTask.Topic, articleHtml, articleTask.Category, articleTask.SiteId, imageBytes);
+                        //isSuccess = await targetPublisher.PublishAsync(articleTask.Topic, articleHtml, articleTask.Category, articleTask.SiteId, imageBytes);
                     }
                     else
                     {
@@ -531,13 +567,13 @@ public class MainForm : Form
         try
         {
             // Запускаем сбор пачками по 5 штук для каждой нашей рубрики констант
-            int count1 = await _contentPlanner.PopulateQueueWithTrendingTopicsAsync(Domain.Constants.AppCategories.SmartHome, 5);
+            int count1 = await _contentPlanner.PopulateQueueWithTrendingTopicsAsync(Domain.Constants.AppCategories.SmartHome, 3);
             LogToUi($"[Планировщик] Добавлено {count1} тем в рубрику Умный Дом.");
 
-            int count2 = await _contentPlanner.PopulateQueueWithTrendingTopicsAsync(Domain.Constants.AppCategories.Smartphones, 5);
+            int count2 = await _contentPlanner.PopulateQueueWithTrendingTopicsAsync(Domain.Constants.AppCategories.Smartphones, 3);
             LogToUi($"[Планировщик] Добавлено {count2} тем в рубрику Смартфоны.");
 
-            int count3 = await _contentPlanner.PopulateQueueWithTrendingTopicsAsync(Domain.Constants.AppCategories.Gadgets, 5);
+            int count3 = await _contentPlanner.PopulateQueueWithTrendingTopicsAsync(Domain.Constants.AppCategories.Gadgets, 3);
             LogToUi($"[Планировщик] Добавлено {count3} тем в рубрику Гаджеты.");
 
             LogToUi("🚀 [Планировщик] Контент-план успешно создан! База данных PostgreSQL заполнена.");

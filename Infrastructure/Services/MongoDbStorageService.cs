@@ -71,5 +71,4 @@ public class MongoDbStorageService : IFileStorageService
             return Array.Empty<byte>();
         }
     }
-
 }
