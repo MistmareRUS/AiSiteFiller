@@ -78,29 +78,18 @@ public class OkPublisherService : IPublisherService
             using var client = new HttpClient();
 
             // Шаг А: Запрашиваем URL для загрузки картинки на сервер Одноклассников
-            string getUploadUrl = "https://ok.ru";
+            string getUploadUrl = "https://" + "api." + "ok." + "ru/" + "fb.do" +
+                                  "?method=" + "photosV2.getUploadUrl" +
+                                  "&gid=" + _groupId +
+                                  "&count=" + "1" +
+                                  "&access_token=" + Uri.EscapeDataString(_accessToken);
 
-            // Передаем параметры строго внутри POST-формы, чтобы шлюз ОК не сбрасывал сессию на страницу логина
-            var uploadUrlParams = new System.Collections.Generic.Dictionary<string, string>
-            {
-                { "method", "photosV2.getUploadUrl" },
-                { "gid", _groupId },
-                { "count", "1" },
-                { "access_token", _accessToken }
-            };
-
-            var uploadUrlContent = new FormUrlEncodedContent(uploadUrlParams);
-
-            // Выполняем POST-запрос
-            var serverResponse = await client.PostAsync(getUploadUrl, uploadUrlContent);
+            // Выполняем чистый GET-запрос без конфликтов заголовков форм
+            var serverResponse = await client.GetAsync(getUploadUrl);
             var serverResponseStr = await serverResponse.Content.ReadAsStringAsync();
 
-            // Дебаг-лог, чтобы мы всегда видели, что именно ответил сервер Одноклассников
             _logger.LogInformation("[OK] Ответ сервера на getUploadUrl: " + serverResponseStr);
-
             using var serverData = JsonDocument.Parse(serverResponseStr);
-
-
 
             // Если Одноклассники успешно выдали внутренний upload_url
             if (serverData.RootElement.TryGetProperty("upload_url", out var urlEl))
