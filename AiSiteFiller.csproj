@@ -9,6 +9,10 @@
 	</PropertyGroup>
 
 	<ItemGroup>
+	  <Compile Include="AdditionalData\Dzen2.html" />
+	</ItemGroup>
+
+	<ItemGroup>
 		<PackageReference Include="Dapper" Version="2.1.35" />
 		<PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.0" />
 		<PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="8.0.0" />
@@ -26,10 +30,6 @@
 		<None Update="appsettings.local.json">
 		  <CopyToOutputDirectory>Always</CopyToOutputDirectory>
 		</None>
-	</ItemGroup>
-
-	<ItemGroup>
-	  <Folder Include="AdditionalData\" />
 	</ItemGroup>
 
 </Project>
