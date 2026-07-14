@@ -14,7 +14,6 @@ public class OkPublisherService : IPublisherService
     private readonly ILogger<OkPublisherService> _logger;
     public string PlatformName => "OK";
 
-    // Инициализация, проверка настроек и парсер таблиц из VkPublisherService
     public OkPublisherService(IConfiguration configuration, ILogger<OkPublisherService> logger)
     {
         _logger = logger;
@@ -26,18 +25,14 @@ public class OkPublisherService : IPublisherService
 
     private string CalculateSignature(Dictionary<string, string> parameters, string accessToken, string secretKey)
     {
-        // 1. Сортируем параметры по алфавиту ключей
         var sortedParams = parameters
-            .Where(p => p.Key != "access_token") // Токен не участвует в первой части подписи
+            .Where(p => p.Key != "access_token")
             .OrderBy(p => p.Key)
             .Select(p => $"{p.Key}={p.Value}");
 
         string paramString = string.Join("", sortedParams);
-
-        // 2. Добавляем MD5 от связки (access_token + secret_key)
         string secretPart = GetMd5Hash(accessToken + secretKey);
 
-        // 3. Финальный MD5 от склеенной строки параметров и секретной части
         return GetMd5Hash(paramString + secretPart);
     }
 
@@ -46,7 +41,7 @@ public class OkPublisherService : IPublisherService
         using MD5 md5 = MD5.Create();
         byte[] inputBytes = Encoding.UTF8.GetBytes(input);
         byte[] hashBytes = md5.ComputeHash(inputBytes);
-        return Convert.ToHexString(hashBytes).ToLower(); // ОК принимает sig в нижнем регистре
+        return Convert.ToHexString(hashBytes).ToLower();
     }
 
     public async Task<bool> PublishAsync(string title, string contentHtml, string metadata, string siteId, byte[]? imageBytes)
@@ -56,7 +51,6 @@ public class OkPublisherService : IPublisherService
         string textWithFormattedTables = contentHtml;
         try
         {
-            // Используем Regex для поиска таблиц, строк и ячеек
             var tableMatches = Regex.Matches(textWithFormattedTables, @"<table[^>]*>(.*?)<\/table>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
             foreach (Match tableMatch in tableMatches)
             {
@@ -67,12 +61,10 @@ public class OkPublisherService : IPublisherService
                 sbTable.AppendLine("\n 📊 СРАВНИТЕЛЬНЫЕ ХАРАКТЕРИСТИКИ МОДЕЛЕЙ:");
                 sbTable.AppendLine("───────────────────────────────────");
 
-                // Обработка заголовков
                 var headers = Regex.Matches(rows[0].Value, @"<th[^>]*>(.*?)<\/th>|<td[^>]*>(.*?)<\/td>", RegexOptions.IgnoreCase | RegexOptions.Singleline)
                                    .Cast<Match>()
                                    .Select(m => Regex.Replace(m.Value, @"<[^>]*>", "").Trim()).ToList();
 
-                // Обработка строк данных
                 for (int i = 1; i < rows.Count; i++)
                 {
                     var cells = Regex.Matches(rows[i].Value, @"<td[^>]*>(.*?)<\/td>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
@@ -89,104 +81,122 @@ public class OkPublisherService : IPublisherService
         }
         catch (Exception ex)
         {
-            _logger.LogWarning("[OK] Ошибка конвертации таблицы: " + ex.Message); //
+            _logger.LogWarning("[OK] Ошибка конвертации таблицы: " + ex.Message);
         }
 
         // 2. Очистка HTML, формирование маскированной CPA-ссылки
         string cleanText = Regex.Replace(textWithFormattedTables.Replace("<p>", "\n\n").Replace("<br>", "\n"), @"<[^>]*>", "");
         string maskedCpaUrl = Application.Helpers.CpaLinkHelper.GenerateMaskedVkLink(title, "tech-info");
 
-        string finalPostText = $"📰 {title.ToUpper()}\n\n{cleanText}\n\n🚀 Подробности: {maskedCpaUrl}";
+        // РАСКОММЕНТИРУЙТЕ СТРОКУ НИЖЕ, КОГДА ТЕСТ ПРОЙДЕТ УСПЕШНО:
+        // string finalPostText = $"📰 {title.ToUpper()}\n\n{cleanText}\n\n🚀 Подробности: {maskedCpaUrl}";
+        string finalPostText = "Тестовый пост для проверки интеграции API Одноклассников";
 
-        // 3. ЗАГРУЗКА ФОТО В ОК ЧЕРЕЗ КЛАССИЧЕСКИЙ REST API ГРУППЫ
-        string photoAttachmentJson = "";
+        string baseApiUrl = "https://" + "api." + "ok." + "ru/" + "fb.do";
+        using var client = new HttpClient();
+        string? photoTokenOnly = null; // Храним строго чистую строку токена
+
+        // 3. ЗАГРУЗКА ФОТО В ОК
         if (imageBytes?.Length > 0)
         {
-            using var client = new HttpClient();
-
-            // 1. Собираем базовые параметры (без sig и access_token)
             var uploadRequestParams = new Dictionary<string, string>
             {
-                { "method", "photosV2.getUploadUrl" },
+                // ИСПОЛЬЗУЕМ ПРАВИЛЬНЫЙ МЕТОД ДЛЯ МЕДИАТОПИКОВ:
+                { "method", "photosV2.getAttachmentUploadUrl" },
                 { "application_key", _applicationKey },
-                { "gid", _groupId }, // <--- Указываем ID группы числом (например, "642398471239")
+                { "gid", _groupId },
                 { "count", "1" }
             };
 
 
-            // 2. Считаем подпись
-            string sig = CalculateSignature(uploadRequestParams, _accessToken, _secretKey);
+            string sigUpload = CalculateSignature(uploadRequestParams, _accessToken, _secretKey);
 
-            // 3. Формируем итоговый URL со всеми параметрами
-            // Ссылка разбита по правилу: " + "
-            string baseApiUrl = "https://apiok.ru" + "/fb.do";
-
-            var finalParams = new List<string>();
+            var uploadUrlParams = new List<string>();
             foreach (var kp in uploadRequestParams)
             {
-                finalParams.Add($"{kp.Key}={Uri.EscapeDataString(kp.Value)}");
+                uploadUrlParams.Add($"{kp.Key}={Uri.EscapeDataString(kp.Value)}");
             }
-            finalParams.Add($"access_token={Uri.EscapeDataString(_accessToken)}");
-            finalParams.Add($"sig={sig}");
+            uploadUrlParams.Add($"access_token={Uri.EscapeDataString(_accessToken)}");
+            uploadUrlParams.Add($"sig={sigUpload}");
 
-            string requestUrl = $"{baseApiUrl}?{string.Join("&", finalParams)}";
+            string requestUploadUrl = $"{baseApiUrl}?{string.Join("&", uploadUrlParams)}";
 
-            // 4. Отправляем запрос через HttpClient
-            using var httpClient = new HttpClient();
-            var serverResponse = await httpClient.PostAsync(requestUrl, null); // Для GET/POST без тела
+            var serverResponse = await client.PostAsync(requestUploadUrl, null);
             string serverResponseStr = await serverResponse.Content.ReadAsStringAsync();
-
 
             _logger.LogInformation("[OK] Ответ сервера на getUploadUrl: " + serverResponseStr);
             using var serverData = JsonDocument.Parse(serverResponseStr);
 
-            // Если Одноклассники успешно выдали внутренний upload_url
             if (serverData.RootElement.TryGetProperty("upload_url", out var urlEl))
             {
-                // Шаг Б: Загружаем массив байт multipart-запросом
                 using var content = new MultipartFormDataContent { { new ByteArrayContent(imageBytes), "file", "img.jpg" } };
                 var uploadResponse = await client.PostAsync(urlEl.GetString(), content);
                 string uploadResponseStr = await uploadResponse.Content.ReadAsStringAsync();
+
+                _logger.LogInformation("[OK] Ответ сервера после загрузки файла: " + uploadResponseStr);
                 using var uploadData = JsonDocument.Parse(uploadResponseStr);
 
-                // Вытаскиваем ID и токен загруженного фото
-                if (uploadData.RootElement.TryGetProperty("photos", out var photosEl) && photosEl.GetArrayLength() > 0)
+                if (uploadData.RootElement.TryGetProperty("photos", out var photosEl) && photosEl.ValueKind == JsonValueKind.Object)
                 {
-                    var firstPhoto = photosEl[0];
-                    if (firstPhoto.TryGetProperty("token", out var tokenEl))
+                    foreach (var photoProperty in photosEl.EnumerateObject())
                     {
-                        // Формируем блок вложения по официальной спецификации OK REST API
-                        photoAttachmentJson = "{\"type\":\"photo\",\"id\":\"" + tokenEl.GetString() + "\"}";
+                        if (photoProperty.Value.TryGetProperty("token", out var tokenEl))
+                        {
+                            photoTokenOnly = tokenEl.GetString();
+                            break;
+                        }
                     }
+                }
+                else if (uploadData.RootElement.TryGetProperty("token", out var rootTokenEl))
+                {
+                    photoTokenOnly = rootTokenEl.GetString();
                 }
             }
         }
-
         // 4. ПУБЛИКАЦИЯ МЕДИАТОПИКА С ОБЛОЖКОЙ НА СТЕНУ ГРУППЫ
-        using var finalClient = new HttpClient();
-        string restRequestUrl = "https://ok.ru";
 
-        // Собираем медиа-блоки темы: текст статьи + блок фотографии (если она успешно загрузилась)
-        string mediaBlocksJson = "[{\"type\":\"text\",\"text\":\"" + System.Web.HttpUtility.JavaScriptStringEncode(finalPostText) + "\"}";
-        if (!string.IsNullOrEmpty(photoAttachmentJson))
+        var jsonOptions = new JsonSerializerOptions
         {
-            mediaBlocksJson += "," + photoAttachmentJson;
-        }
-        mediaBlocksJson += "]";
-
-        // Упаковываем параметры для mediatopic.post
-        var requestParams = new System.Collections.Generic.Dictionary<string, string>
-        {
-            { "method", "mediatopic.post" },
-            { "gid", _groupId },
-            { "type", "GROUP_THEME" }, // Публикация в ленту сообщества
-            { "attachment", mediaBlocksJson },
-            { "access_token", _accessToken }
+            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
         };
 
-        var formContent = new FormUrlEncodedContent(requestParams);
-        var response = await finalClient.PostAsync(restRequestUrl, formContent);
+        var mediaList = new List<object>
+        {
+            new { type = "text", text = finalPostText }
+        };
+
+        if (!string.IsNullOrEmpty(photoTokenOnly))
+        {
+            mediaList.Add(new { type = "photo", id = photoTokenOnly });
+        }
+
+        var attachmentRoot = new { media = mediaList };
+        string mediaBlocksJson = JsonSerializer.Serialize(attachmentRoot, jsonOptions);
+
+        var postRequestParams = new Dictionary<string, string>
+        {
+            { "method", "mediatopic.post" },
+            { "application_key", _applicationKey },
+            { "gid", _groupId },
+            { "type", "GROUP_THEME" },
+            { "attachment", mediaBlocksJson }
+        };
+
+        string sigPost = CalculateSignature(postRequestParams, _accessToken, _secretKey);
+        postRequestParams.Add("access_token", _accessToken);
+        postRequestParams.Add("sig", sigPost);
+
+        var paramList = new List<string>();
+        foreach (var kvp in postRequestParams)
+        {
+            paramList.Add($"{kvp.Key}={Uri.EscapeDataString(kvp.Value)}");
+        }
+        string requestBody = string.Join("&", paramList);
+
+        using var stringContent = new StringContent(requestBody, System.Text.Encoding.UTF8, "application/x-www-form-urlencoded");
+        var response = await client.PostAsync(baseApiUrl, stringContent);
         string resultStr = await response.Content.ReadAsStringAsync();
+
 
         if (!response.IsSuccessStatusCode || resultStr.Contains("error_code"))
         {
@@ -195,6 +205,5 @@ public class OkPublisherService : IPublisherService
 
         _logger.LogInformation("✅ [OK] Обзор с обложкой успешно опубликован на стену группы!");
         return true;
-
     }
 }
