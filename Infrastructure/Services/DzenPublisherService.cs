@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using OpenQA.Selenium;
 using OpenQA.Selenium.Chrome;
 using OpenQA.Selenium.Support.UI;
+using System.Text;
 using System.Text.RegularExpressions;
 using Keys = OpenQA.Selenium.Keys;
 
@@ -11,8 +12,10 @@ namespace AiSiteFiller.Infrastructure.Services;
 
 public class DzenPublisherService : IPublisherService, IDisposable
 {
-    private readonly string _sessionId;
+    private readonly string _dzenChannelId;
     private readonly ILogger<DzenPublisherService> _logger;
+    private readonly bool _isGroomingMode = true;
+    private readonly bool _isDebugDraftMode = true;
     private IWebDriver? _driver;
     public string PlatformName => "DZEN";
 
@@ -20,7 +23,9 @@ public class DzenPublisherService : IPublisherService, IDisposable
     {
         // Для логгера используем общую фабрику
         _logger = logger;
-        _sessionId = (configuration["DzenOptions:SessionId"] ?? "").Trim();
+        _dzenChannelId = (configuration["DzenOptions:SessionId"] ?? "").Trim();
+        bool.TryParse(configuration["DzenOptions:IsGroomingMode"], out _isGroomingMode);
+        bool.TryParse(configuration["DzenOptions:IsDebugDraftMode"], out _isDebugDraftMode);
     }
 
     public bool IsCookieExpiringSoon(IConfiguration configuration)
@@ -51,118 +56,106 @@ public class DzenPublisherService : IPublisherService, IDisposable
 
     public async Task<bool> PublishAsync(string title, string contentHtml, string metadata, string siteId, byte[]? imageBytes)
     {
+        // ========================================================
+        // ШАГ 1: ФОРМАТИРОВАНИЕ HTML-ТАБЛИЦ В ТЕКСТОВУЮ ПСЕВДОГРАФИКУ
+        // ========================================================
+        string textWithFormattedTables = contentHtml;
         try
         {
-            // 1. НАСТРОЙКА ЧИСТОГО БРАУЗЕРА CHROME
+            var tableMatches = Regex.Matches(textWithFormattedTables, @"<table[^>]*>(.*?)<\/table>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            foreach (Match tableMatch in tableMatches)
+            {
+                var rows = Regex.Matches(tableMatch.Groups[1].Value, @"<tr[^>]*>(.*?)<\/tr>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+                if (rows.Count <= 1) continue;
+
+                var sbTable = new StringBuilder();
+                sbTable.AppendLine("\n 📊 СРАВНИТЕЛЬНЫЕ ХАРАКТЕРИСТИКИ МОДЕЛЕЙ:");
+                sbTable.AppendLine("───────────────────────────────────");
+
+                var headers = Regex.Matches(rows[0].Groups[1].Value, @"<th[^>]*>(.*?)<\/th>|<td[^>]*>(.*?)<\/td>", RegexOptions.IgnoreCase | RegexOptions.Singleline)
+                                   .Cast<Match>()
+                                   .Select(m => Regex.Replace(m.Value, @"<[^>]*>", "").Trim()).ToList();
+
+                for (int i = 1; i < rows.Count; i++)
+                {
+                    var cells = Regex.Matches(rows[i].Groups[1].Value, @"<td[^>]*>(.*?)<\/td>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+                    if (cells.Count == 0) continue;
+
+                    sbTable.AppendLine("🔹 " + Regex.Replace(cells[0].Groups[1].Value, @"<[^>]*>", "").Trim().ToUpper());
+                    for (int j = 1; j < cells.Count && j < headers.Count; j++)
+                    {
+                        sbTable.AppendLine(" ▪ " + headers[j] + ": " + Regex.Replace(cells[j].Groups[1].Value, @"<[^>]*>", "").Trim());
+                    }
+                    sbTable.AppendLine();
+                }
+                sbTable.AppendLine("───────────────────────────────────");
+                textWithFormattedTables = textWithFormattedTables.Replace(tableMatch.Value, sbTable.ToString());
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("[DZEN] Ошибка конвертации HTML-таблицы: " + ex.Message);
+        }
+
+        try
+        {
+            // 2. НАСТРОЙКА ИЗОЛИРОВАННОГО ПРОФИЛЯ ДЛЯ ВХОДА
             var options = new ChromeOptions();
             options.AddArgument("--start-maximized");
             options.AddArgument("--no-sandbox");
             options.AddArgument("--disable-dev-shm-usage");
-            options.AddArgument("--user-agent=" + "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+
+            string dzenProfileDir = "D:\\" + "Repositories\\" + "AiSiteFiller\\" + "DzenWebDriverProfile";
+            if (!Directory.Exists(dzenProfileDir))
+            {
+                Directory.CreateDirectory(dzenProfileDir);
+            }
+            options.AddArgument("--user-data-dir=" + dzenProfileDir);
+            options.AddArgument("--disable-extensions");
 
             _driver = new ChromeDriver(options);
-            _logger.LogInformation("[DZEN] Экземпляр Chrome запущен для проверки сессии.");
+            _logger.LogInformation("[DZEN] Постоянный браузер конвейера Дзен успешно запущен.");
 
+            // 3. ПРОВЕРКА АВТОРИЗАЦИИ НА ГЛАВНОЙ СТРАНИЦЕ
             string baseDzenUrl = "https://" + "dzen." + "ru";
             _driver.Navigate().GoToUrl(baseDzenUrl);
             await Task.Delay(3000);
 
-            // ========================================================
-            // ШАГ 2: ПРОВЕРКА CONFIG / РУЧНАЯ АВТОРИЗАЦИЯ -> БУФЕР ОБМЕНА
-            // ========================================================
-            // Если в конфиге пусто — запускаем ваш полуавтоматический сценарий
-            if (string.IsNullOrEmpty(_sessionId))
+            bool isAuthRequired = false;
+            try
             {
-                _logger.LogWarning("[DZEN] ⚠️ В конфигурации отсутствует SessionId. Ожидаю ручной вход...");
+                var loginButton = _driver.FindElement(By.XPath("//button[contains(., 'Войти') or contains(@class, 'login')]"));
+                if (loginButton != null && loginButton.Displayed) isAuthRequired = true;
+            }
+            catch { }
 
-                // Выводим бесконечную модалку WinForms БЕЗ ТАЙМЕРОВ
+            if (isAuthRequired)
+            {
+                _logger.LogWarning("[DZEN] ⚠️ ТРЕБУЕТСЯ АВТОРИЗАЦИЯ! Подтвердите вход в окне браузера...");
                 System.Windows.Forms.MessageBox.Show(
-                    "В конфигурационном файле appsettings.json не найден токен Дзена.\n\n" +
-                    "Пожалуйста, прямо сейчас в открывшемся окне браузера выполните вход в аккаунт.\n\n" +
-                    "После того как вы успешно авторизуетесь и попадете на главную страницу Дзена, нажмите ОК в этом окне.",
-                    "Требуется первая авторизация Дзен",
+                    "Пожалуйста, авторизуйтесь под своим аккаунтом в окне Chrome.\n\nПосле успешного входа нажмите ОК в этом окне!",
+                    "Авторизация в Дзен",
                     System.Windows.Forms.MessageBoxButtons.OK,
                     System.Windows.Forms.MessageBoxIcon.Information
                 );
-
-                _logger.LogInformation("[DZEN] Модалка закрыта. Извлекаю свежую куку из браузера...");
-
-                // Вытаскиваем нужную куку zen_session_id из текущей сессии Chrome
-                // Вытаскиваем нужную куку zen_session_id из текущей сессии Chrome
-                var extractedCookie = _driver.Manage().Cookies.GetCookieNamed("zen_session_id");
-
-                if (extractedCookie != null && !string.IsNullOrEmpty(extractedCookie.Value))
-                {
-                    string newTokenValue = extractedCookie.Value;
-
-                    // 🔥 ФИКС ОШИБКИ: Запускаем копирование в буфер в принудительном STA-потоке
-                    var staThread = new System.Threading.Thread(() =>
-                    {
-                        try
-                        {
-                            System.Windows.Forms.Clipboard.SetText(newTokenValue);
-                        }
-                        catch (Exception clipboardEx)
-                        {
-                            _logger.LogError("[DZEN] Ошибка записи в буфер обмена: " + clipboardEx.Message);
-                        }
-                    });
-
-                    staThread.SetApartmentState(System.Threading.ApartmentState.STA); // Задаем поток как STA
-                    staThread.Start();
-                    staThread.Join(); // Дожидаемся завершения записи в буфер
-
-                    _logger.LogInformation("✅ [DZEN] Свежий токен zen_session_id успешно скопирован в буфер обмена!");
-
-                    System.Windows.Forms.MessageBox.Show(
-                        "Токен авторизации успешно скопирован в буфер обмена!\n\n" +
-                        "Сейчас приложение закроется. Откройте ваш файл конфигурации appsettings.json и вставьте значение из буфера в поле 'SessionId'.\n\n" +
-                        "После этого перезапустите конвейер задач.",
-                        "Токен скопирован в буфер",
-                        System.Windows.Forms.MessageBoxButtons.OK,
-                        System.Windows.Forms.MessageBoxIcon.Warning
-                    );
-                }
-                else
-                {
-                    _logger.LogError("[DZEN] Ошибка: Не удалось найти куку 'zen_session_id' после авторизации. Вы вошли в аккаунт?");
-                }
-
-                // Принудительно гасим браузер и прерываем выполнение задачи, чтобы вы сохранили конфиг
-                CloseBrowser();
-                return false;
+                await Task.Delay(3000);
             }
 
-            // ========================================================
-            // ШАГ 3: ШТАТНЫЙ АВТОМАТИЧЕСКИЙ ВХОД (Если кука уже есть в конфиге)
-            // ========================================================
-            _logger.LogInformation("[DZEN] Токен найден в конфигурации. Внедряю сессию...");
-
-            var zenCookie = new Cookie("zen_session_id", _sessionId, "." + "dzen." + "ru", "/", DateTime.Now.AddYears(1));
-            _driver.Manage().Cookies.AddCookie(zenCookie);
-
-            _driver.Navigate().Refresh();
-            await Task.Delay(4000);
-
-            // ========================================================
-            // ШАГ 4: РОУТИНГ В ВАШУ ЛИЧНУЮ СТУДИЮ
-            // ========================================================
-            string dzenChannelId = "6a5630b88e35e707df2d4ee3"; // Ваш хардкод ID
-            string studioUrl = "https://" + "dzen." + "ru/" + "profile/" + "editor/" + "id/" + dzenChannelId + "/" + "publications";
-
+            // 4. ПЕРЕХОД В ВАШУ ЛИЧНУЮ СТУДИЮ ПО ХАРДКОД-ССЫЛКЕ
+            string studioUrl = "https://" + "dzen." + "ru/" + "profile/" + "editor/" + "id/" + _dzenChannelId + "/" + "publications";
             _driver.Navigate().GoToUrl(studioUrl);
-            _logger.LogInformation("[DZEN] Открываю Студию публикаций: " + studioUrl);
+            _logger.LogInformation("[DZEN] Открываю вашу личную Студию: " + studioUrl);
 
             var wait = new WebDriverWait(_driver, TimeSpan.FromSeconds(15));
             await Task.Delay(4000);
 
-            // Нажимаем плюсик по data-testid
+            // Нажимаем плюсик
             _logger.LogInformation("[DZEN] Нажимаю кнопку плюсика добавления публикации...");
             IWebElement addButton = wait.Until(d => d.FindElement(By.XPath("//button[@data-testid='add-publication-button']")));
             addButton.Click();
             await Task.Delay(1500);
 
-            // Нажимаем "Написать статью" по aria-label
+            // Нажимаем "Написать статью"
             _logger.LogInformation("[DZEN] Нажимаю пункт меню 'Написать статью'...");
             IWebElement writeArticleOption = wait.Until(d => d.FindElement(By.XPath("//*[@aria-label='Написать статью']")));
             writeArticleOption.Click();
@@ -170,8 +163,8 @@ public class DzenPublisherService : IPublisherService, IDisposable
             _logger.LogInformation("[DZEN] Ожидаю загрузку бланка редактора черновика...");
             await Task.Delay(6000);
 
-            // Переходим ко второй части для заполнения полей статьи
-            return await CompletePublication(title, contentHtml, metadata, imageBytes);
+            // 🔥 Передаем ОТФОРМАТИРОВАННЫЙ текст "textWithFormattedTables" вместо сырого "contentHtml"
+            return await CompletePublication(title, textWithFormattedTables, metadata, imageBytes);
         }
         catch (Exception ex)
         {
@@ -184,12 +177,11 @@ public class DzenPublisherService : IPublisherService, IDisposable
         }
     }
 
+
     private async Task<bool> CompletePublication(string title, string contentHtml, string metadata, byte[]? imageBytes)
     {
         if (_driver == null) return false;
 
-        bool IsGroomingMode = true;
-        bool IsDebugDraftMode = true;
         var wait = new WebDriverWait(_driver, TimeSpan.FromSeconds(10));
 
         // --------------------------------------------------------
@@ -246,12 +238,12 @@ public class DzenPublisherService : IPublisherService, IDisposable
         }
 
         // --------------------------------------------------------
-        // ШАГ 2: ВВОД ОСНОВНОГО ТЕКСТА
+        // ШАГ 2: ВВОД ОСНОВНОГО ТЕКСТА (ФИКС ОШИБКИ BMP ЧЕРЕЗ БУФЕР ОБМЕНА)
         // --------------------------------------------------------
         try
         {
             string cleanText = Regex.Replace(contentHtml.Replace("<p>", "\n\n").Replace("<br>", "\n"), @"<[^>]*>", "");
-            if (IsGroomingMode)
+            if (_isGroomingMode)
             {
                 _logger.LogInformation("[DZEN] Включен режим прогрева канала. Удаляю CPA-ссылки...");
                 cleanText = Regex.Replace(cleanText, @"https?://[^\s]+", "[информация доступна в источнике]");
@@ -264,13 +256,33 @@ public class DzenPublisherService : IPublisherService, IDisposable
 
             bodyField.Click();
             await Task.Delay(500);
-            bodyField.SendKeys(cleanText);
-            _logger.LogInformation("[DZEN] Основной текст статьи успешно вставлен.");
+
+            // 🔥 ГЛАВНЫЙ ФИКС: Записываем текст со всеми эмодзи в буфер обмена в STA-потоке
+            var staThread = new System.Threading.Thread(() =>
+            {
+                try
+                {
+                    System.Windows.Forms.Clipboard.SetText(cleanText);
+                }
+                catch (Exception clipboardEx)
+                {
+                    _logger.LogError("[DZEN] Ошибка записи текста статьи в буфер: " + clipboardEx.Message);
+                }
+            });
+            staThread.SetApartmentState(System.Threading.ApartmentState.STA);
+            staThread.Start();
+            staThread.Join();
+
+            // Вставляем текст из буфера обмена в редактор Дзена нажатием Ctrl + V
+            bodyField.SendKeys(Keys.Control + "v");
+            _logger.LogInformation("[DZEN] Основной текст статьи (включая эмодзи и таблицы) успешно вставлен через Ctrl+V.");
+            await Task.Delay(1000);
         }
         catch (Exception ex)
         {
             _logger.LogWarning("[DZEN] ⚠️ Предупреждение: Не удалось автоматически вставить текст статьи: " + ex.Message);
         }
+
 
         // --------------------------------------------------------
         // ШАГ 3: ЗАГРУЗКА ИЗОБРАЖЕНИЯ (ЖЕЛЕЗОБЕТОННЫЙ ВАРИАНТ ЧЕРЕЗ JS)
@@ -357,7 +369,7 @@ public class DzenPublisherService : IPublisherService, IDisposable
         // --------------------------------------------------------
         // ШАГ 5: ВКЛЮЧЕНИЕ ЧЕКБОКСА ОТЛОЖЕННОЙ ПУБЛИКАЦИИ
         // --------------------------------------------------------
-        if (IsDebugDraftMode)
+        if (_isDebugDraftMode)
         {
             try
             {
