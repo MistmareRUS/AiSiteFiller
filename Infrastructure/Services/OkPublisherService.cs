@@ -52,13 +52,15 @@ public class OkPublisherService : IPublisherService
     {
         if (string.IsNullOrEmpty(_accessToken) || string.IsNullOrEmpty(_groupId)) return false;
 
+        // ==========================================
+        // ШАГ 1: ФОРМАТИРОВАНИЕ ТАБЛИЦ ХАРАКТЕРИСТИК
+        // ==========================================
         string textWithFormattedTables = contentHtml;
         try
         {
             var tableMatches = Regex.Matches(textWithFormattedTables, @"<table[^>]*>(.*?)<\/table>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
             foreach (Match tableMatch in tableMatches)
             {
-                // ИСПРАВЛЕНО: добавлен индекс Groups[1]
                 var rows = Regex.Matches(tableMatch.Groups[1].Value, @"<tr[^>]*>(.*?)<\/tr>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
                 if (rows.Count <= 1) continue;
 
@@ -66,21 +68,18 @@ public class OkPublisherService : IPublisherService
                 sbTable.AppendLine("\n 📊 СРАВНИТЕЛЬНЫЕ ХАРАКТЕРИСТИКИ МОДЕЛЕЙ:");
                 sbTable.AppendLine("───────────────────────────────────");
 
-                // ИСПРАВЛЕНО: добавлен индекс Groups[1]
-                var headers = Regex.Matches(rows[0].Groups[1].Value, @"<th[^>]*>(.*?)<\/th>|<td[^>]*>(.*?)<\/td>", RegexOptions.IgnoreCase | RegexOptions.Singleline)
+                var headers = Regex.Matches(rows[0].Value, @"<th[^>]*>(.*?)<\/th>|<td[^>]*>(.*?)<\/td>", RegexOptions.IgnoreCase | RegexOptions.Singleline)
                                    .Cast<Match>()
                                    .Select(m => Regex.Replace(m.Value, @"<[^>]*>", "").Trim()).ToList();
 
                 for (int i = 1; i < rows.Count; i++)
                 {
-                    // ИСПРАВЛЕНО: добавлен индекс Groups[1]
-                    var cells = Regex.Matches(rows[i].Groups[1].Value, @"<td[^>]*>(.*?)<\/td>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+                    var cells = Regex.Matches(rows[i].Value, @"<td[^>]*>(.*?)<\/td>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
                     if (cells.Count == 0) continue;
 
-                    // ИСПРАВЛЕНО: добавлен индекс Groups[0]
-                    sbTable.AppendLine("🔹 " + Regex.Replace(cells[0].Groups[0].Value, @"<[^>]*>", "").Trim().ToUpper());
+                    sbTable.AppendLine("🔹 " + Regex.Replace(cells[0].Value, @"<[^>]*>", "").Trim().ToUpper());
                     for (int j = 1; j < cells.Count && j < headers.Count; j++)
-                        sbTable.AppendLine(" ▪ " + headers[j] + ": " + Regex.Replace(cells[j].Groups[0].Value, @"<[^>]*>", "").Trim());
+                        sbTable.AppendLine(" ▪ " + headers[j] + ": " + Regex.Replace(cells[j].Value, @"<[^>]*>", "").Trim());
                     sbTable.AppendLine();
                 }
                 sbTable.AppendLine("───────────────────────────────────");
@@ -91,25 +90,27 @@ public class OkPublisherService : IPublisherService
         {
             _logger.LogWarning("[OK] Ошибка конвертации таблицы: " + ex.Message);
         }
+        // ==========================================
+        // ШАГ 2: ОЧИСТКА HTML И ПОДГОТОВКА ССЫЛОК
+        // ==========================================
 
-
-        // 2. Вытаскиваем и генерируем ОДНУ главную CPA-ссылку для сниппета
+        // 1. Вытягиваем партнерский маскированный URL для рекламного сниппета внизу поста
         string maskedCpaUrl = Application.Helpers.CpaLinkHelper.GenerateMaskedVkLink(title, "tech-info");
 
-        // Очищаем HTML, а из текста ПОЛНОСТЬЮ убираем все ссылки на маркетплейсы,
-        // чтобы они не взрывали парсер Одноклассников. Вместо них будет красивый сниппет внизу!
+        // 2. Очищаем HTML-теги, превращая абзацы и переносы строк в текстовый формат
         string cleanText = Regex.Replace(textWithFormattedTables.Replace("<p>", "\n\n").Replace("<br>", "\n"), @"<[^>]*>", "");
 
-        // Очищаем текст от любых http/https ссылок
-        cleanText = Regex.Replace(cleanText, @"https?://[^\s]+", "");
-
-        string finalPostText = $"📰 {title.ToUpper()}\n\n{cleanText}";
+        // ВАЖНО: Мы БОЛЬШЕ НЕ ВЫРЕЗАЕМ ссылки через Regex и НЕ ОБРЕЗАЕМ текст через Substring!
+        // Формируем полноценную, длинную статью со всеми вашими CPA-ссылками Яндекс Маркета и таблицами
+        string finalPostText = $"📰 {title.ToUpper()}\n\n{cleanText}\n\n🚀 Подробности и цены: {maskedCpaUrl}";
 
         string baseApiUrl = "https://" + "api." + "ok." + "ru/" + "fb.do";
         using var client = new HttpClient();
         string? photoTokenOnly = null;
 
-        // 3. ЗАГРУЗКА ФОТО В ОК
+        // ==========================================
+        // ШАГ 3: ЗАГРУЗКА ФОТОГРАФИИ НА СЕРВЕР ОК
+        // ==========================================
         if (imageBytes?.Length > 0)
         {
             var uploadRequestParams = new Dictionary<string, string>
@@ -143,8 +144,8 @@ public class OkPublisherService : IPublisherService
                 var uploadResponse = await client.PostAsync(urlEl.GetString(), content);
                 string uploadResponseStr = await uploadResponse.Content.ReadAsStringAsync();
 
+                _logger.LogInformation("[OK] Ответ сервера после загрузки файла: " + uploadResponseStr);
                 using var uploadData = JsonDocument.Parse(uploadResponseStr);
-                string? tempToken = null;
 
                 if (uploadData.RootElement.TryGetProperty("photos", out var photosEl) && photosEl.ValueKind == JsonValueKind.Object)
                 {
@@ -152,62 +153,33 @@ public class OkPublisherService : IPublisherService
                     {
                         if (photoProperty.Value.TryGetProperty("token", out var tokenEl))
                         {
-                            tempToken = tokenEl.GetString();
+                            photoTokenOnly = tokenEl.GetString();
                             break;
                         }
                     }
                 }
                 else if (uploadData.RootElement.TryGetProperty("token", out var rootTokenEl))
                 {
-                    tempToken = rootTokenEl.GetString();
+                    photoTokenOnly = rootTokenEl.GetString();
                 }
 
-                // ВЫЗОВ photosV2.commit ДЛЯ ПОЛУЧЕНИЯ НАСТОЯЩЕГО ЧИСЛОВОГО ID
-                if (!string.IsNullOrEmpty(tempToken))
+                // Очищаем токен от Unicode-кодирования .NET, возвращая знаки '+' и '/'
+                if (!string.IsNullOrEmpty(photoTokenOnly))
                 {
-                    // Форматируем параметр photos как массив объектов JSON, как требует спецификация ОК для коммита
-                    string photosJsonParam = "[{\"token\":\"" + tempToken + "\"}]";
-
-                    var commitParams = new Dictionary<string, string>
-                    {
-                        { "method", "photosV2.commit" },
-                        { "application_key", _applicationKey },
-                        { "gid", _groupId },
-                        { "photos", photosJsonParam }
-                    };
-
-                    string sigCommit = CalculateSignature(commitParams, _accessToken, _secretKey);
-                    commitParams.Add("access_token", _accessToken);
-                    commitParams.Add("sig", sigCommit);
-
-                    var commitPairs = new List<string>();
-                    foreach (var kvp in commitParams)
-                    {
-                        commitPairs.Add($"{kvp.Key}={Uri.EscapeDataString(kvp.Value)}");
-                    }
-                    string commitRequestBody = string.Join("&", commitPairs);
-
-                    using var commitContent = new StringContent(commitRequestBody, System.Text.Encoding.UTF8, "application/x-www-form-urlencoded");
-                    var commitResponse = await client.PostAsync(baseApiUrl, commitContent);
-                    string commitResultStr = await commitResponse.Content.ReadAsStringAsync();
-
-                    _logger.LogInformation("[OK] Ответ сервера на photosV2.commit: " + commitResultStr);
-
-                    using var commitData = JsonDocument.Parse(commitResultStr);
-                    if (commitData.RootElement.TryGetProperty("photos", out var commitPhotosEl) && commitPhotosEl.GetArrayLength() > 0)
-                    {
-                        var firstPhoto = commitPhotosEl[0];
-                        if (firstPhoto.TryGetProperty("id", out var idEl))
-                        {
-                            photoTokenOnly = idEl.GetString();
-                            _logger.LogInformation("✅ [OK] Получен числовой ID фотографии: " + photoTokenOnly);
-                        }
-                    }
+                    photoTokenOnly = photoTokenOnly
+                        .Replace("\\u002B", "+")
+                        .Replace("\\u002b", "+")
+                        .Replace("\\/", "/");
+                    _logger.LogInformation("✅ [OK] Токен фотографии успешно получен: " + photoTokenOnly);
                 }
             }
         }
 
-        // 4. ПУБЛИКАЦИЯ МЕДИАТОПИКА С ОБЛОЖКОЙ И СНИППЕТОМ ССЫЛКИ
+        // ==========================================
+        // ШАГ 4: ФОРМИРОВАНИЕ ATTACHMENT И ПУБЛИКАЦИЯ
+        // ==========================================
+
+        // Возвращаем ваш оригинальный текст (убираем обрезку Substring!)
         string safeTextForJson = finalPostText
             .Replace("\\", "\\\\")
             .Replace("\"", "\\\"")
@@ -219,13 +191,20 @@ public class OkPublisherService : IPublisherService
 
         var sbJson = new StringBuilder();
         sbJson.Append("{\"media\":[");
+
+        // 1. Блок текста
         sbJson.Append("{\"type\":\"text\",\"text\":\"").Append(safeTextForJson).Append("\"}");
 
+        // 2. Блок фото. КРИТИЧЕСКИЙ ФИКС ДЛЯ ОК API ГРУПП:
+        // Если используется токен, Одноклассники для GROUP_THEME требуют, 
+        // чтобы он передавался в поле "id", но перед ним ОБЯЗАТЕЛЬНО должна идти обертка photos
         if (!string.IsNullOrEmpty(photoTokenOnly))
         {
-            sbJson.Append(",{\"type\":\"photo\",\"id\":\"").Append(photoTokenOnly).Append("\"}");
+            // Каноничный синтаксис ОК для временных токенов в групповых темах
+            sbJson.Append(",{\"type\":\"photo\",\"list\":[{\"id\":\"").Append(photoTokenOnly).Append("\"}]}");
         }
 
+        // 3. Блок ссылки
         sbJson.Append(",{\"type\":\"link\",\"url\":\"").Append(safeCpaUrl).Append("\"}");
         sbJson.Append("]}");
 
@@ -260,7 +239,7 @@ public class OkPublisherService : IPublisherService
             throw new Exception("Ошибка OK REST API: " + resultStr);
         }
 
-        _logger.LogInformation("✅ [OK] Обзор с обложкой и CPA-сниппетом успешно опубликован!");
+        _logger.LogInformation("✅ [OK] Полноценный обзор с обложкой и CPA-сниппетом успешно опубликован на стену группы!");
         return true;
     }
 }
