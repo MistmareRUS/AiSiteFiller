@@ -154,7 +154,6 @@ public class DzenPublisherService : IPublisherService, IDisposable
             CloseBrowser();
         }
     }
-
     // ========================================================
     // ЧАСТЬ 2: БЕЗОПАСНОЕ ЗАПОЛНЕНИЕ КОНТЕНТА И СБОРКА ЧЕРНОВИКА
     // ========================================================
@@ -189,11 +188,11 @@ public class DzenPublisherService : IPublisherService, IDisposable
         catch (Exception ex)
         {
             _logger.LogError("[DZEN] ❌ Критическая ошибка: Не удалось заполнить заголовок: " + ex.Message);
-            return false; // Без заголовка продолжать нет смысла
+            return false;
         }
 
         // --------------------------------------------------------
-        // ШАГ 2: ВВОД ОСНОВНОГО ТЕКСТА (ЗАЩИЩЕННЫЙ БЛОК)
+        // ШАГ 2: ВВОД ОСНОВНОГО ТЕКСТА
         // --------------------------------------------------------
         try
         {
@@ -220,28 +219,46 @@ public class DzenPublisherService : IPublisherService, IDisposable
         }
 
         // --------------------------------------------------------
-        // ШАГ 3: ЗАГРУЗКА ИЗОБРАЖЕНИЯ (ЗАЩИЩЕННЫЙ БЛОК)
+        // ШАГ 3: ЗАГРУЗКА ИЗОБРАЖЕНИЯ ЧЕРЕЗ БОКОВУЮ ТЫКАЛКУ
         // --------------------------------------------------------
         if (imageBytes?.Length > 0)
         {
             try
             {
                 _logger.LogInformation("[DZEN] Обнаружены байты изображения. Инициирую загрузку файла...");
+
                 string tempImagePath = Path.Combine(Path.GetTempPath(), "dzen_cover_" + Guid.NewGuid().ToString("N") + ".jpg");
                 await File.WriteAllBytesAsync(tempImagePath, imageBytes);
 
-                var bodyField = _driver.FindElement(By.XPath("//div[@contenteditable='true' and @aria-describedby='placeholder-ZenDraftEditor']"));
-                bodyField.SendKeys(Keys.Control + Keys.Home);
-                bodyField.SendKeys(Keys.Enter);
+                IWebElement currentBody = _driver.FindElement(By.XPath(
+                    "//div[@contenteditable='true' and @aria-describedby='placeholder-ZenDraftEditor'] " +
+                    "| //div[contains(@class, 'zenDraftEditor')]//div[@contenteditable='true']"
+                ));
+
+                // Создаем пустую строку сверху
+                currentBody.SendKeys(Keys.Control + Keys.Home);
+                await Task.Delay(500);
+                currentBody.SendKeys(Keys.Enter);
                 await Task.Delay(1000);
-                bodyField.SendKeys(Keys.ArrowUp);
-                await Task.Delay(1000);
+                currentBody.SendKeys(Keys.ArrowUp);
+                await Task.Delay(1500);
+
+                // Кликаем по кнопке фотоаппарата по вашему data-tip атрибуту
+                _logger.LogInformation("[DZEN] Ищу боковую кнопку фотоаппарата на пустой строке...");
+                IWebElement imageButton = wait.Until(d => d.FindElement(By.XPath(
+                    "//button[@data-tip='Вставить изображение'] " +
+                    "| //button[contains(@class, 'sideButton')]"
+                )));
+
+                imageButton.Click();
+                _logger.LogInformation("[DZEN] Боковая кнопка фотоаппарата успешно нажата!");
+                await Task.Delay(1500);
 
                 var fileInput = _driver.FindElement(By.XPath("//input[@type='file' and (contains(@accept, 'image') or contains(@class, 'file'))]"));
                 fileInput.SendKeys(tempImagePath);
 
-                _logger.LogInformation("[DZEN] Картинка отправлена в инпут. Ожидаю обработки...");
-                await Task.Delay(6000);
+                _logger.LogInformation("[DZEN] Путь к файлу отправлен в инпут Дзена. Ожидаю обработку обложки...");
+                await Task.Delay(7000);
 
                 try { File.Delete(tempImagePath); } catch { }
             }
@@ -252,11 +269,11 @@ public class DzenPublisherService : IPublisherService, IDisposable
         }
 
         // --------------------------------------------------------
-        // ШАГ 4: НАЖАТИЕ КНОПКИ «ОПУБЛИКОВАТЬ» (ЗАЩИЩЕННЫЙ БЛОК)
+        // ШАГ 4: НАЖАТИЕ ВЕРХНЕЙ КНОПКИ «ОПУБЛИКОВАТЬ»
         // --------------------------------------------------------
         try
         {
-            _logger.LogInformation("[DZEN] Нажимаю верхнюю кнопку 'Опубликовать'...");
+            _logger.LogInformation("[DZEN] Нажимаю верхнюю кнопку 'Опубликовать' для вызова шторки настроек...");
             IWebElement publishButton = wait.Until(d => d.FindElement(By.XPath(
                 "//button[@data-testid='article-publish-btn']"
             )));
@@ -266,48 +283,21 @@ public class DzenPublisherService : IPublisherService, IDisposable
         catch (Exception ex)
         {
             _logger.LogError("[DZEN] ❌ Критическая ошибка: Не удалось нажать верхнюю кнопку 'Опубликовать': " + ex.Message);
-            return false; // Без клика по шторке мы не зайдем в настройки тегов
+            return false;
         }
 
         // --------------------------------------------------------
-        // ШАГ 5: АВТОМАТИЧЕСКАЯ УСТАНОВКА ТЕГОВ (ЗАЩИЩЕННЫЙ БЛОК)
-        // --------------------------------------------------------
-        try
-        {
-            string tagsSource = string.IsNullOrEmpty(metadata) ? "обзоры, техника, гаджеты" : metadata;
-            var tagsList = tagsSource.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries);
-
-            var tagInput = _driver.FindElement(By.XPath("//input[contains(@placeholder, 'Теги') or contains(@class, 'tag') or contains(@placeholder, 'ключевые слова')]"));
-            foreach (var tag in tagsList)
-            {
-                string trimmedTag = tag.Trim();
-                if (!string.IsNullOrEmpty(trimmedTag))
-                {
-                    tagInput.SendKeys(trimmedTag);
-                    await Task.Delay(500);
-                    tagInput.SendKeys(Keys.Enter);
-                    await Task.Delay(500);
-                }
-            }
-            _logger.LogInformation("[DZEN] Все теги из метаданных успешно проставлены.");
-        }
-        catch (Exception tagEx)
-        {
-            _logger.LogWarning("[DZEN] ⚠️ Предупреждение: Не удалось проставить теги в шторке: " + tagEx.Message);
-        }
-
-        // --------------------------------------------------------
-        // ШАГ 6: ВКЛЮЧЕНИЕ ЧЕКБОКСА ОТЛОЖЕННОЙ ПУБЛИКАЦИИ (ЗАЩИЩЕННЫЙ БЛОК)
+        // ШАГ 5: ВКЛЮЧЕНИЕ ЧЕКБОКСА ОТЛОЖЕННОЙ ПУБЛИКАЦИИ
         // --------------------------------------------------------
         if (IsDebugDraftMode)
         {
             try
             {
                 _logger.LogInformation("[DZEN] Режим отладки активен. Включаю чекбокс 'Опубликовать позже'...");
-                var laterCheckbox = _driver.FindElement(By.XPath(
-                    "//label[contains(., 'Опубликовать позже') or contains(., 'Позже')]//input[@type='checkbox'] " +
-                    "| //span[contains(., 'Опубликовать позже')]/preceding-sibling::input" +
-                    "| //div[contains(text(), 'Опубликовать позже')]"
+                IWebElement laterCheckbox = _driver.FindElement(By.XPath(
+                    "//span[contains(@class, 'checkbox-input__title') and text()='Опубликовать позже']/ancestor::label//input[@type='checkbox'] " +
+                    "| //span[text()='Опубликовать позже']/preceding-sibling::div//input " +
+                    "| //label[contains(@class, 'checkbox-input')]//span[contains(., 'Опубликовать позже')]"
                 ));
                 laterCheckbox.Click();
                 _logger.LogInformation("[DZEN] Чекбокс отложенной публикации успешно активирован.");
@@ -320,24 +310,20 @@ public class DzenPublisherService : IPublisherService, IDisposable
         }
 
         // --------------------------------------------------------
-        // ШАГ 7: ФИНАЛЬНОЕ СОХРАНЕНИЕ / СОЗДАНИЕ ПУБЛИКАЦИИ
+        // ШАГ 6: НАЖАТИЕ ФИНАЛЬНОЙ КНОПКИ ПОДТВЕРЖДЕНИЯ (ПО ВЕРСТКЕ)
         // --------------------------------------------------------
         try
         {
-            var finalConfirmButton = _driver.FindElement(By.XPath(
-                "//div[contains(@class, 'modal')]//button[contains(., 'Опубликовать') or contains(., 'Готово')]" +
-                "| //button[contains(@class, 'accentPrimary') and contains(., 'Опубликовать')]"
-            ));
-            finalConfirmButton.Click();
+            _logger.LogInformation("[DZEN] Нажимаю финальную кнопку подтверждения внизу шторки...");
 
-            if (IsDebugDraftMode)
-            {
-                _logger.LogInformation("✅ [DZEN] Статья успешно сохранена в раздел 'Отложенные' (Черновики)!");
-            }
-            else
-            {
-                _logger.LogInformation("✅ [DZEN] Статья успешно улетела в живую ленту рекомендаций!");
-            }
+            // Локатор бьет точно в предоставленный вами data-testid="publish-btn"
+            IWebElement finalConfirmButton = wait.Until(d => d.FindElement(By.XPath(
+                "//button[@data-testid='publish-btn'] " +
+                "| //div[contains(@class, 'modal-actions')]//button"
+            )));
+
+            finalConfirmButton.Click();
+            _logger.LogInformation("✅ [DZEN] Статья успешно сохранена в раздел 'Отложенные' (Черновики)!");
 
             await Task.Delay(4000);
             return true;
@@ -348,6 +334,7 @@ public class DzenPublisherService : IPublisherService, IDisposable
             return false;
         }
     }
+
 
     private void CloseBrowser()
     {
