@@ -262,8 +262,15 @@ public class MainForm : Form
             new WordPressPublisherService(_configuration, _loggerFactory.CreateLogger<WordPressPublisherService>()),
             new VkPublisherService(_configuration, _loggerFactory.CreateLogger<VkPublisherService>()),
             new OkPublisherService(_configuration, _loggerFactory.CreateLogger<OkPublisherService>()),
-            // Сюда в будущем в одну строчку добавятся: new TelegramPublisherService(...), new DzenPublisherService(...)
+            new DzenPublisherService(_configuration, _loggerFactory.CreateLogger<DzenPublisherService>()),
+            // Сюда в будущем в одну строчку добавятся: new TelegramPublisherService(...)
         };
+
+        //if (_publishers.FirstOrDefault(x => x.PlatformName == "DZEN") is DzenPublisherService dzenService)
+        //{
+        //    // Проверяем куку. Если она просрочена или скоро умрет, выскочит MessageBox
+        //    dzenService.IsCookieExpiringSoon(_configuration);
+        //}
 
         LogToUi("⚙️ Синхронизация структуры базы данных PostgreSQL через EF Core...");
 
@@ -447,9 +454,16 @@ public class MainForm : Form
                     }
                     else if (pubTask.Platform == "OK")
                     {
-                        // 🔥 НАШ НОВЫЙ ВЫЗОВ ОДНОКЛАССНИКОВ:
-                        // Передаем тему, HTML статьи (из которого наш парсер сделает текстовую таблицу) и ID сайта
                         targetPublisher = _publishers.Find(p => p is OkPublisherService);
+                    }
+                    else if (pubTask.Platform == "DZEN")
+                    {
+                        if (targetPublisher is DzenPublisherService dzenService)
+                        {
+                            // Проверяем куку. Если она просрочена или скоро умрет, выскочит MessageBox
+                            dzenService.IsCookieExpiringSoon(_configuration);
+                        }
+                        targetPublisher = _publishers.Find(p => p is DzenPublisherService);
                     }
 
                     if (targetPublisher != null)
