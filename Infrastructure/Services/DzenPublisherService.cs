@@ -1,4 +1,5 @@
 ﻿using AiSiteFiller.Application.Interfaces;
+using Infrastructure.Helpers;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using OpenQA.Selenium;
@@ -293,6 +294,7 @@ public class DzenPublisherService : IPublisherService, IDisposable
 
             // Вставляем текст из буфера обмена в редактор Дзена нажатием Ctrl + V
             bodyField.SendKeys(Keys.Control + "v");
+            await ClipboardHistoryHelper.DeleteLastItemAsync(_logger);
             _logger.LogInformation("[DZEN] Основной текст статьи (включая эмодзи и таблицы) успешно вставлен через Ctrl+V.");
             await Task.Delay(1000);
         }

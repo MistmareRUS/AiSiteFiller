@@ -1,4 +1,5 @@
 ﻿using AiSiteFiller.Application.Interfaces;
+using Infrastructure.Helpers;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using OpenQA.Selenium;
@@ -238,7 +239,7 @@ public class TeletypePublisherService : IPublisherService, IDisposable
             {
                 try
                 {
-                    System.Windows.Forms.Clipboard.Clear();
+                    // МЫ УБРАЛИ Clipboard.Clear() ОТСЮДА, ЧТОБЫ НЕ СНОСИТЬ ВАШУ ИСТОРИЮ
                     var dataObject = new System.Windows.Forms.DataObject();
                     dataObject.SetData(System.Windows.Forms.DataFormats.Html, clipboardHtml);
                     System.Windows.Forms.Clipboard.SetDataObject(dataObject, true);
@@ -257,9 +258,12 @@ public class TeletypePublisherService : IPublisherService, IDisposable
             bodyField.Click();
             await Task.Delay(500);
             bodyField.SendKeys(Keys.Control + "v");
+            await ClipboardHistoryHelper.DeleteLastItemAsync(_logger);
 
             // Даем Vue.js время на окончательный рендеринг структуры и ссылок
             await Task.Delay(3000);
+
+            _logger.LogInformation("[TELETYPE] Текст импортирован. Буфер за собой очищен.");
         }
         catch (Exception ex)
         {
