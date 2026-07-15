@@ -6,8 +6,6 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System.Data;
-using System.Drawing.Printing;
-using System.Security.Policy;
 using ILoggerFactory = Microsoft.Extensions.Logging.ILoggerFactory;
 using Label = System.Windows.Forms.Label;
 using LogLevel = Microsoft.Extensions.Logging.LogLevel;
@@ -263,6 +261,7 @@ public class MainForm : Form
             new VkPublisherService(_configuration, _loggerFactory.CreateLogger<VkPublisherService>()),
             new OkPublisherService(_configuration, _loggerFactory.CreateLogger<OkPublisherService>()),
             new DzenPublisherService(_configuration, _loggerFactory.CreateLogger<DzenPublisherService>()),
+            new TeletypePublisherService(_configuration, _loggerFactory.CreateLogger<TeletypePublisherService>()),
             // Сюда в будущем в одну строчку добавятся: new TelegramPublisherService(...)
         };
 
@@ -458,12 +457,16 @@ public class MainForm : Form
                     }
                     else if (pubTask.Platform == "DZEN")
                     {
+                        targetPublisher = _publishers.Find(p => p is DzenPublisherService);
                         if (targetPublisher is DzenPublisherService dzenService)
                         {
                             // Проверяем куку. Если она просрочена или скоро умрет, выскочит MessageBox
                             dzenService.IsCookieExpiringSoon(_configuration);
                         }
-                        targetPublisher = _publishers.Find(p => p is DzenPublisherService);
+                    }
+                    else if (pubTask.Platform == "TELETYPE")
+                    {
+                        targetPublisher = _publishers.Find(p => p is TeletypePublisherService);
                     }
 
                     if (targetPublisher != null)
