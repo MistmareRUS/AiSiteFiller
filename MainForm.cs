@@ -262,6 +262,7 @@ public class MainForm : Form
             new OkPublisherService(_configuration, _loggerFactory.CreateLogger<OkPublisherService>()),
             new DzenPublisherService(_configuration, _loggerFactory.CreateLogger<DzenPublisherService>()),
             new TeletypePublisherService(_configuration, _loggerFactory.CreateLogger<TeletypePublisherService>()),
+            new TelegramPublisherService(_configuration, _loggerFactory.CreateLogger<TelegramPublisherService>()),
             // Сюда в будущем в одну строчку добавятся: new TelegramPublisherService(...)
         };
 
@@ -455,6 +456,10 @@ public class MainForm : Form
                     {
                         targetPublisher = _publishers.Find(p => p is OkPublisherService);
                     }
+                    else if (pubTask.Platform == "Telegram")
+                    {
+                        targetPublisher = _publishers.Find(p => p is TelegramPublisherService);
+                    }
                     else if (pubTask.Platform == "DZEN")
                     {
                         targetPublisher = _publishers.Find(p => p is DzenPublisherService);
@@ -484,8 +489,6 @@ public class MainForm : Form
                             Invoke(() => LogToUi($"🚀 Отправляю публикацию в [{pubTask.Platform}] с умными CPA-ссылками из конфига..."));
                             isSuccess = await targetPublisher.PublishAsync(articleTask.Topic, cpaOptimizedHtml, articleTask.Category, articleTask.SiteId, imageBytes);
                         }
-
-                        //isSuccess = await targetPublisher.PublishAsync(articleTask.Topic, articleHtml, articleTask.Category, articleTask.SiteId, imageBytes);
                     }
                     else
                     {

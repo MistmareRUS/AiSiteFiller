@@ -190,20 +190,23 @@ public class OpenAiGptService : IAiService
         englishVisualPrompt = englishVisualPrompt.Trim('"', '\'', ' ');
         _logger.LogInformation("[Локальный ИИ] Итоговый англоязычный промпт для 4070 Super: " + englishVisualPrompt);
 
-        // 2. Теперь передаем этот кристально чистый английский промпт в вашу видеокарту
-        string localPrompt = "Photorealistic macro studio photography of " + englishVisualPrompt +
-                             ", high-tech style, professional product shot, soft commercial lighting, highly detailed, 8k, no text, no words, crisp focus.";
+        // 2. Формируем промпт: добавляем чистоту, студийный свет и явный запрет текста
+        string localPrompt = "High-end commercial product photography of " + englishVisualPrompt +
+            ", premium studio lighting, hyperrealistic matte textures, sharp focus, cinematic composition, no branding, no text.";
 
+        // Оптимизируем настройки для Juggernaut Ragnarok (фотореализм без "каракулей")
         var imageRequestBody = new
         {
             prompt = localPrompt,
-            negative_prompt = "text, words, logo, watermark, low quality, bad hands, blurry, drawing, painting, cartoon, signs, car, vehicle, wheels",
-            steps = 22,
-            cfg_scale = 7,
+            // Усиленный негатив для удаления букв, текста и логотипов
+            negative_prompt = "(text:1.4), (words:1.4), (letters:1.4), (font:1.4), (typography:1.4), logo, watermark, signature, blurred, illustration, cartoon",
+            steps = 30,
+            cfg_scale = 4.5,        // Низкий CFG = меньше "галлюцинаций" и надписей
             width = 1024,
             height = 576,
-            sampler_name = "Euler a"
+            sampler_name = "DPM++ 2M Karras" // Топовый сэмплер для текстур
         };
+
 
         string imageJsonString = JsonSerializer.Serialize(imageRequestBody, jsonOptions);
         string localSdUrl = "http://localhost:7860/sdapi/v1/txt2img";
