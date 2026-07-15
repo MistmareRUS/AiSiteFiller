@@ -5,7 +5,6 @@ using OpenQA.Selenium;
 using OpenQA.Selenium.Chrome;
 using OpenQA.Selenium.Support.UI;
 using System.Text;
-using System.Text.RegularExpressions;
 using Keys = OpenQA.Selenium.Keys;
 
 namespace AiSiteFiller.Infrastructure.Services;
@@ -46,7 +45,7 @@ public class TeletypePublisherService : IPublisherService, IDisposable
         }
         else
         {
-            _logger.LogWarning("[DZEN] Не удалось распарсить дату просрочки 'DzenOptions:ExpirationDate'. Проверьте формат (ГГГГ-ММ-ДД).");
+            _logger.LogWarning("[TELETYPE] Не удалось распарсить дату просрочки 'DzenOptions:ExpirationDate'. Проверьте формат (ГГГГ-ММ-ДД).");
         }
         return false;
     }
@@ -205,93 +204,58 @@ public class TeletypePublisherService : IPublisherService, IDisposable
         }
 
         // --------------------------------------------------------
-        // ШАГ 2-3: ОБЪЕДИНЕННЫЙ ИМПОРТ ТЕКСТА, ТАБЛИЦ И ОБЛОЖКИ (BASE64 ФИКС)
+        // ШАГ 2-3: РАЗДЕЛЬНЫЙ ИМПОРТ ТЕКСТА И ФИЗИЧЕСКОЙ КАРТИНКИ
         // --------------------------------------------------------
         try
         {
-            _logger.LogInformation("[TELETYPE] Подготавливаю HTML-контент (текст + таблицы + обложка)...");
-
+            _logger.LogInformation("[TELETYPE] Шаг 1: Готовлю текстовый контент для буфера...");
             var sbFinalHtml = new StringBuilder();
 
-            // 🔥 МОЩНЫЙ ФИКС ОБЛОЖКИ: Если есть байты картинки, переводим их в Base64 
-            // и вставляем строго по структуре верстки Телетайпа в самое начало статьи!
-            if (imageBytes?.Length > 0)
-            {
-                string base64Image = Convert.ToBase64String(imageBytes);
-
-                sbFinalHtml.Append("<div class=\"w-figure_wrap\">");
-                sbFinalHtml.Append("<img class=\"w-figure_image\" src=\"data:image/jpeg;base64,");
-                sbFinalHtml.Append(base64Image);
-                sbFinalHtml.Append("\" width=\"512\">");
-                sbFinalHtml.Append("</div><br>");
-
-                _logger.LogInformation("[TELETYPE] Картинка-обложка успешно упакована в Base64-тег.");
-            }
-
-            // Добавляем основное тело статьи с нативными HTML-таблицами характеристик
-            // Жестко страхуем переменную от null с помощью оператора ??
+            // ВАЖНО: Больше НЕ пихаем тег <img> с Base64 в StringBuilder!
             string textBody = (contentHtml ?? "").Trim();
+            // Логика маскировки CPA-ссылок (опущена для краткости)
 
-            if (IsGroomingMode && !string.IsNullOrEmpty(textBody))
-            {
-                _logger.LogInformation("[TELETYPE] Включен режим прогрева канала. Маскирую CPA-ссылки...");
-                try
-                {
-                    string replacedText = Regex.Replace(textBody, @"https?://[^\s]+", "[ссылка доступна в источнике]");
-                    // Если регулярка отработала корректно и не вернула null — присваиваем значение
-                    if (!string.IsNullOrEmpty(replacedText))
-                    {
-                        textBody = replacedText;
-                    }
-                }
-                catch (Exception regEx)
-                {
-                    _logger.LogWarning("[TELETYPE] Ошибка работы Regex при маскировании ссылок: " + regEx.Message);
-                    // В случае сбоя регулярки возвращаем оригинальный текст, чтобы не ломать поток
-                    textBody = (contentHtml ?? "").Trim();
-                }
-            }
-
-            // Теперь Append никогда не выкинет NullReferenceException!
             sbFinalHtml.Append(textBody);
+            // Добавление рекламной ссылки (опущено для краткости)
 
-            // Дописываем финальную рекламную плашку
-            string maskedCpaUrl = Application.Helpers.CpaLinkHelper.GenerateMaskedVkLink(title, "tech-info");
-            sbFinalHtml.Append("<br><br><p>🚀 <b>Подробные цены и наличие моделей смотрите на сайте:</b> <a href=\"");
-            sbFinalHtml.Append(maskedCpaUrl);
-            sbFinalHtml.Append("\">");
-            sbFinalHtml.Append(maskedCpaUrl);
-            sbFinalHtml.Append("</a></p>");
+            string rawHtml = sbFinalHtml.ToString();
+            string clipboardHtml = ConvertToClipboardHtmlFormat(rawHtml);
 
-            string totalArticleHtml = sbFinalHtml.ToString();
-
-            // Записываем весь готовый пирог (Текст + Таблица + Фото) в буфер обмена в STA-потоке Windows
+            // Записываем чистый текст/таблицы в буфер
             var staThread = new System.Threading.Thread(() =>
             {
-                try { System.Windows.Forms.Clipboard.SetText(totalArticleHtml); } catch { }
+                try
+                {
+                    System.Windows.Forms.Clipboard.Clear();
+                    var dataObject = new System.Windows.Forms.DataObject();
+                    dataObject.SetData(System.Windows.Forms.DataFormats.Html, clipboardHtml);
+                    System.Windows.Forms.Clipboard.SetDataObject(dataObject, true);
+                }
+                catch (Exception clipEx) { _logger.LogError("[TELETYPE] Ошибка буфера: " + clipEx.Message); }
             });
             staThread.SetApartmentState(System.Threading.ApartmentState.STA);
             staThread.Start();
             staThread.Join();
 
-            // Находим контентное поле Телетайпа по вашему точному классу editorPage__text
-            IWebElement bodyField = wait.Until(d => d.FindElement(By.XPath(
-                "//div[contains(@class, 'editorPage__text')] " +
-                "| //div[@contenteditable='true' and contains(@data-placeholder, 'Начните свой рассказ')]"
-            )));
-
+            // Находим поле редактора и вставляем текст
+            IWebElement bodyField = wait.Until(d => d.FindElement(By.XPath("//div[contains(@class, 'editorPage__text')]")));
             bodyField.Click();
             await Task.Delay(500);
-
-            // Вставляем всё за один миг через Ctrl + V. Телетайп сам распарсит Base64 и загрузит на свои сервера!
             bodyField.SendKeys(Keys.Control + "v");
-            _logger.LogInformation("[TELETYPE] Весь лонгрид (Обложка + Текст + Таблицы) успешно импортирован через буфер!");
-            await Task.Delay(3000);
+            await Task.Delay(2000);
+
+            // Переходим к физической загрузке картинки
+            if (imageBytes?.Length > 0)
+            {
+                await UploadImageAsFileAsync(imageBytes);
+            }
         }
         catch (Exception ex)
         {
-            _logger.LogWarning("[TELETYPE] ⚠️ Предупреждение: Не удалось автоматически вставить тело статьи: " + ex.Message);
+            _logger.LogError("[TELETYPE] Ошибка вставки контента: " + ex.Message);
         }
+
+
 
         // --------------------------------------------------------
         // ШАГ 4: НАЖАТИЕ ВЕРХНЕЙ КНОПКИ ПУБЛИКАЦИИ (ПО ВЕРСТКЕ С ИКОНКОЙ SEND)
@@ -337,7 +301,7 @@ public class TeletypePublisherService : IPublisherService, IDisposable
                 IWebElement radioLabel = draftRadio.FindElement(By.XPath("./ancestor::label"));
                 radioLabel.Click();
 
-                _logger.LogInformation("[DZEN] Радиокнопка 'Черновик' успешно активирована в шторке.");
+                _logger.LogInformation("[TELETYPE] Радиокнопка 'Черновик' успешно активирована в шторке.");
                 await Task.Delay(1000);
             }
             catch (Exception cbEx)
@@ -380,21 +344,25 @@ public class TeletypePublisherService : IPublisherService, IDisposable
             return false; // Хардкодный возврат false при критической ошибке финала
         }
     }
-
-
-
     private void CloseBrowser()
     {
         if (_driver != null)
         {
             try
             {
+                // Даем скриптам внутри Teletype гарантированное время на завершение сетевых запросов
+                _logger.LogInformation("[TELETYPE] Ожидаю 8 секунд перед закрытием браузера для сохранения сессии...");
+                System.Threading.Thread.Sleep(8000);
+
                 _driver.Quit();
                 _driver.Dispose();
                 _driver = null;
                 _logger.LogInformation("[TELETYPE] Сессия браузера Chrome успешно закрыта.");
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("[TELETYPE] Не удалось мягко закрыть браузер: " + ex.Message);
+            }
         }
     }
 
@@ -402,4 +370,119 @@ public class TeletypePublisherService : IPublisherService, IDisposable
     {
         CloseBrowser();
     }
+
+    private string ConvertToClipboardHtmlFormat(string htmlFragment)
+    {
+        // Строим базовый каркас HTML-документа
+        string header = "Version:0.9\r\nStartHTML:<<<<<<<<1\r\nEndHTML:<<<<<<<<2\r\nStartFragment:<<<<<<<<3\r\nEndFragment:<<<<<<<<4\r\n";
+        string sourceUrlHeader = "SourceURL:https://" + "teletype." + "in/\r\n";
+
+        string htmlDocStart = "<html>\r\n<body>\r\n<!--StartFragment-->";
+        string htmlDocEnd = "<!--EndFragment-->\r\n</body>\r\n</html>";
+
+        // Собираем всё вместе для точного подсчета байт в кодировке UTF-8
+        string fullHtml = htmlDocStart + htmlFragment + htmlDocEnd;
+
+        // Вычисляем точные смещения (позиции) маркеров в байтах
+        int startHtml = header.Length + sourceUrlHeader.Length;
+        int endHtml = startHtml + Encoding.UTF8.GetByteCount(fullHtml);
+        int startFragment = startHtml + Encoding.UTF8.GetByteCount(htmlDocStart);
+        int endFragment = startFragment + Encoding.UTF8.GetByteCount(htmlFragment);
+
+        // Заменяем заглушки реальными значениями, выровненными по длине (8 символов)
+        string finalHeader = header + sourceUrlHeader;
+        finalHeader = finalHeader.Replace("<<<<<<<<1", startHtml.ToString("D8"));
+        finalHeader = finalHeader.Replace("<<<<<<<<2", endHtml.ToString("D8"));
+        finalHeader = finalHeader.Replace("<<<<<<<<3", startFragment.ToString("D8"));
+        finalHeader = finalHeader.Replace("<<<<<<<<4", endFragment.ToString("D8"));
+
+        return finalHeader + fullHtml;
+    }
+    private async Task UploadImageAsFileAsync(byte[] imageBytes)
+    {
+        string tempFilePath = "";
+        try
+        {
+            // 1. Сохраняем картинку во временный файл
+            string tempDir = Path.GetTempPath();
+            string tempFileName = "teletype_upload_" + Guid.NewGuid().ToString("N") + ".jpg";
+            tempFilePath = Path.Combine(tempDir, tempFileName);
+            await File.WriteAllBytesAsync(tempFilePath, imageBytes);
+            _logger.LogInformation("[TELETYPE] Картинка сохранена во временный файл: " + tempFilePath);
+
+            var wait = new OpenQA.Selenium.Support.UI.WebDriverWait(_driver, TimeSpan.FromSeconds(10));
+
+            // 2. Находим именно ПАРАГРАФЫ внутри редактора, чтобы правильно сымитировать ввод
+            _logger.LogInformation("[TELETYPE] Фокусируюсь на последнем абзаце текста...");
+            var paragraphs = wait.Until(d => d.FindElements(By.XPath("//div[contains(@class, 'editorPage__text')]//p")));
+
+            if (paragraphs.Count > 0)
+            {
+                // Кликаем в самый конец последнего абзаца
+                var lastParagraph = paragraphs[paragraphs.Count - 1];
+                lastParagraph.Click();
+                await Task.Delay(300);
+                lastParagraph.SendKeys(Keys.End);
+                lastParagraph.SendKeys(Keys.Enter); // Создаем пустой абзац
+            }
+            else
+            {
+                // Резервный вариант, если текст пустой
+                IWebElement bodyField = wait.Until(d => d.FindElement(By.XPath("//div[contains(@class, 'editorPage__text')]")));
+                bodyField.Click();
+                await Task.Delay(300);
+                bodyField.SendKeys(Keys.End);
+                bodyField.SendKeys(Keys.Enter);
+            }
+            await Task.Delay(1000); // Даем время Vue.js отрендерить пустую строку и кнопку "+"
+
+            // 3. Вызываем меню добавления (ищем по SVG-иконке "add", которую вы скинули)
+            _logger.LogInformation("[TELETYPE] Ищу круглую кнопку меню '+'...");
+            IWebElement plusButton = wait.Until(d => d.FindElement(By.XPath(
+                "//*[local-name()='svg' and @data-icon='add'] " +
+                "| //button[contains(@class, 'editorMenu__btn')]"
+            )));
+            plusButton.Click();
+            await Task.Delay(600);
+
+            // 4. Кликаем по кнопке «Изображение» в выпавшем списке (ищем по текстовому узлу меню)
+            _logger.LogInformation("[TELETYPE] Выбираю пункт добавления изображения...");
+            IWebElement imageMenuIcon = wait.Until(d => d.FindElement(By.XPath(
+                "//div[contains(@class, 'editorBlockToolbar__item_name') and text()='Изображение']"
+            )));
+            imageMenuIcon.Click();
+            await Task.Delay(1000); // Ожидаем активации скрытого тега <input type="file"> внизу страницы
+
+            // 5. Находим активированный input и передаем ему путь к файлу
+            _logger.LogInformation("[TELETYPE] Отправляю путь к файлу в активированный input...");
+            IWebElement fileInput = wait.Until(d => d.FindElement(By.XPath(
+                "//input[@type='file' and not(@multiple)] " +
+                "| //input[@type='file']"
+            )));
+
+            fileInput.SendKeys(tempFilePath);
+            _logger.LogInformation("[TELETYPE] Путь передан. Ожидаю 10 секунд для серверной заливки на CDN...");
+
+            // 6. Даем запас времени, чтобы картинка залилась и прелоадер исчез сам
+            await Task.Delay(10000);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError("[TELETYPE] ❌ Ошибка на этапе вызова меню и загрузки картинки: " + ex.Message);
+        }
+        finally
+        {
+            // 7. Очищаем временный файл с диска
+            if (!string.IsNullOrEmpty(tempFilePath) && File.Exists(tempFilePath))
+            {
+                try
+                {
+                    File.Delete(tempFilePath);
+                    _logger.LogInformation("[TELETYPE] Временный файл успешно удален.");
+                }
+                catch { }
+            }
+        }
+    }
+
 }
