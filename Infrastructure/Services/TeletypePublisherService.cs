@@ -204,24 +204,36 @@ public class TeletypePublisherService : IPublisherService, IDisposable
         }
 
         // --------------------------------------------------------
-        // ШАГ 2-3: РАЗДЕЛЬНЫЙ ИМПОРТ ТЕКСТА И ФИЗИЧЕСКОЙ КАРТИНКИ
+        // ШАГ 2-3: КОМБИНИРОВАННЫЙ ИМПОРТ (ИЗОБРАЖЕНИЕ -> УМНЫЙ ТЕКСТ СО ССЫЛКАМИ)
         // --------------------------------------------------------
         try
         {
-            _logger.LogInformation("[TELETYPE] Шаг 1: Готовлю текстовый контент для буфера...");
-            var sbFinalHtml = new StringBuilder();
+            // 1. Сначала загружаем обложку наверх страницы редактора
+            if (imageBytes?.Length > 0)
+            {
+                _logger.LogInformation("[TELETYPE] Загружаю обложку статьи...");
+                await UploadImageAsFileAsync(imageBytes);
+            }
 
-            // ВАЖНО: Больше НЕ пихаем тег <img> с Base64 в StringBuilder!
-            string textBody = (contentHtml ?? "").Trim();
-            // Логика маскировки CPA-ссылок (опущена для краткости)
+            // 2. Умная конвертация HTML-таблиц в текстовый список для Телетайпа
+            _logger.LogInformation("[TELETYPE] Запускаю парсинг и конвертацию HTML-таблиц...");
+            string convertedHtml = ConvertHtmlTableToTeletypeText(contentHtml ?? "");
 
-            sbFinalHtml.Append(textBody);
-            // Добавление рекламной ссылки (опущено для краткости)
+            // 3. Формируем маскированную CPA-ссылку на наш сайт (как для ВК)
+            string domainId = "tech-info";
+            string maskedCpaUrl = Application.Helpers.CpaLinkHelper.GenerateMaskedVkLink(title, domainId);
 
-            string rawHtml = sbFinalHtml.ToString();
-            string clipboardHtml = ConvertToClipboardHtmlFormat(rawHtml);
+            // 4. Склеиваем тело статьи с финальным рекламным блоком (используем тег <a> для кликабельности)
+            var sbFinalBody = new StringBuilder();
+            sbFinalBody.Append(convertedHtml);
+            sbFinalBody.AppendLine("<br><br>🚀 <strong>Читать полный обзор и сравнить актуальные цены на нашем сайте:</strong> ");
+            sbFinalBody.AppendLine($"<a href=\"{maskedCpaUrl}\">{maskedCpaUrl}</a><br>");
 
-            // Записываем чистый текст/таблицы в буфер
+            string finalContentHtml = sbFinalBody.ToString();
+
+            // 5. Кодируем итоговый HTML-фрагмент в системный UTF-8 формат буфера Windows
+            string clipboardHtml = ConvertToClipboardHtmlFormat(finalContentHtml.Trim());
+
             var staThread = new System.Threading.Thread(() =>
             {
                 try
@@ -231,30 +243,28 @@ public class TeletypePublisherService : IPublisherService, IDisposable
                     dataObject.SetData(System.Windows.Forms.DataFormats.Html, clipboardHtml);
                     System.Windows.Forms.Clipboard.SetDataObject(dataObject, true);
                 }
-                catch (Exception clipEx) { _logger.LogError("[TELETYPE] Ошибка буфера: " + clipEx.Message); }
+                catch (Exception clipEx)
+                {
+                    _logger.LogError("[TELETYPE] Ошибка записи в буфер обмена: " + clipEx.Message);
+                }
             });
             staThread.SetApartmentState(System.Threading.ApartmentState.STA);
             staThread.Start();
             staThread.Join();
 
-            // Находим поле редактора и вставляем текст
+            // 6. Находим поле редактора и вставляем весь структурированный контент под картинку
             IWebElement bodyField = wait.Until(d => d.FindElement(By.XPath("//div[contains(@class, 'editorPage__text')]")));
             bodyField.Click();
             await Task.Delay(500);
             bodyField.SendKeys(Keys.Control + "v");
-            await Task.Delay(2000);
 
-            // Переходим к физической загрузке картинки
-            if (imageBytes?.Length > 0)
-            {
-                await UploadImageAsFileAsync(imageBytes);
-            }
+            // Даем Vue.js время на окончательный рендеринг структуры и ссылок
+            await Task.Delay(3000);
         }
         catch (Exception ex)
         {
-            _logger.LogError("[TELETYPE] Ошибка вставки контента: " + ex.Message);
+            _logger.LogError("[TELETYPE] Критическая ошибка на этапе комбинированного импорта: " + ex.Message);
         }
-
 
 
         // --------------------------------------------------------
@@ -373,31 +383,48 @@ public class TeletypePublisherService : IPublisherService, IDisposable
 
     private string ConvertToClipboardHtmlFormat(string htmlFragment)
     {
-        // Строим базовый каркас HTML-документа
+        // Шаблон с заглушками для байтовых смещений
         string header = "Version:0.9\r\nStartHTML:<<<<<<<<1\r\nEndHTML:<<<<<<<<2\r\nStartFragment:<<<<<<<<3\r\nEndFragment:<<<<<<<<4\r\n";
-        string sourceUrlHeader = "SourceURL:https://" + "teletype." + "in/\r\n";
-
-        string htmlDocStart = "<html>\r\n<body>\r\n<!--StartFragment-->";
+        string sourceUrlHeader = "SourceURL:https://teletype.in/\r\n";
+        string htmlDocStart = "<html>\r\n<head><meta charset=\"UTF-8\"></head>\r\n<body>\r\n<!--StartFragment-->";
         string htmlDocEnd = "<!--EndFragment-->\r\n</body>\r\n</html>";
 
-        // Собираем всё вместе для точного подсчета байт в кодировке UTF-8
-        string fullHtml = htmlDocStart + htmlFragment + htmlDocEnd;
+        // Преобразуем все части в UTF-8 байты для точного расчета позиций
+        byte[] byteHeaderAndSrc = Encoding.UTF8.GetBytes(header + sourceUrlHeader);
+        byte[] byteDocStart = Encoding.UTF8.GetBytes(htmlDocStart);
+        byte[] byteFragment = Encoding.UTF8.GetBytes(htmlFragment);
+        byte[] byteDocEnd = Encoding.UTF8.GetBytes(htmlDocEnd);
 
-        // Вычисляем точные смещения (позиции) маркеров в байтах
-        int startHtml = header.Length + sourceUrlHeader.Length;
-        int endHtml = startHtml + Encoding.UTF8.GetByteCount(fullHtml);
-        int startFragment = startHtml + Encoding.UTF8.GetByteCount(htmlDocStart);
-        int endFragment = startFragment + Encoding.UTF8.GetByteCount(htmlFragment);
+        // Вычисляем точные смещения в байтах
+        int startHtml = byteHeaderAndSrc.Length;
+        int startFragment = startHtml + byteDocStart.Length;
+        int endFragment = startFragment + byteFragment.Length;
+        int endHtml = endFragment + byteDocEnd.Length;
 
-        // Заменяем заглушки реальными значениями, выровненными по длине (8 символов)
-        string finalHeader = header + sourceUrlHeader;
-        finalHeader = finalHeader.Replace("<<<<<<<<1", startHtml.ToString("D8"));
-        finalHeader = finalHeader.Replace("<<<<<<<<2", endHtml.ToString("D8"));
-        finalHeader = finalHeader.Replace("<<<<<<<<3", startFragment.ToString("D8"));
-        finalHeader = finalHeader.Replace("<<<<<<<<4", endFragment.ToString("D8"));
+        // Заполняем заголовки смещениями (8 символов, дополненные нулями)
+        string finalHeader = (header + sourceUrlHeader)
+            .Replace("<<<<<<<<1", startHtml.ToString("D8"))
+            .Replace("<<<<<<<<2", endHtml.ToString("D8"))
+            .Replace("<<<<<<<<3", startFragment.ToString("D8"))
+            .Replace("<<<<<<<<4", endFragment.ToString("D8"));
 
-        return finalHeader + fullHtml;
+        // Собираем итоговый байтовый массив
+        byte[] finalHeaderBytes = Encoding.UTF8.GetBytes(finalHeader);
+        byte[] totalBytes = new byte[finalHeaderBytes.Length + byteDocStart.Length + byteFragment.Length + byteDocEnd.Length];
+
+        int currentPos = 0;
+        Buffer.BlockCopy(finalHeaderBytes, 0, totalBytes, currentPos, finalHeaderBytes.Length);
+        currentPos += finalHeaderBytes.Length;
+        Buffer.BlockCopy(byteDocStart, 0, totalBytes, currentPos, byteDocStart.Length);
+        currentPos += byteDocStart.Length;
+        Buffer.BlockCopy(byteFragment, 0, totalBytes, currentPos, byteFragment.Length);
+        currentPos += byteFragment.Length;
+        Buffer.BlockCopy(byteDocEnd, 0, totalBytes, currentPos, byteDocEnd.Length);
+
+        // Возвращаем строку (DataObject преобразует её обратно в UTF-8 при передаче)
+        return Encoding.UTF8.GetString(totalBytes);
     }
+
     private async Task UploadImageAsFileAsync(byte[] imageBytes)
     {
         string tempFilePath = "";
@@ -483,6 +510,82 @@ public class TeletypePublisherService : IPublisherService, IDisposable
                 catch { }
             }
         }
+    }
+    private string ConvertHtmlTableToTeletypeText(string htmlInput)
+    {
+        string processedText = htmlInput;
+        try
+        {
+            var tableMatches = System.Text.RegularExpressions.Regex.Matches(
+                processedText,
+                @"<table[^>]*>([\s\S]*?)<\/table>",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Singleline
+            );
+
+            foreach (System.Text.RegularExpressions.Match tableMatch in tableMatches)
+            {
+                var rows = System.Text.RegularExpressions.Regex.Matches(
+                    tableMatch.Groups[1].Value,
+                    @"<tr[^>]*>([\s\S]*?)<\/tr>",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Singleline
+                );
+
+                if (rows.Count <= 1) continue;
+
+                var sbTable = new StringBuilder();
+                sbTable.AppendLine("<br><strong>📊 СРАВНИТЕЛЬНЫЕ ХАРАКТЕРИСТИКИ МОДЕЛЕЙ:</strong><br>");
+                sbTable.AppendLine("───────────────────────────────────<br>");
+
+                var headersMatches = System.Text.RegularExpressions.Regex.Matches(
+                    rows[0].Value,
+                    @"<t[hd][^>]*>([\s\S]*?)<\/t[hd]>",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Singleline
+                );
+                var headers = headersMatches.Cast<System.Text.RegularExpressions.Match>()
+                    .Select(m => System.Text.RegularExpressions.Regex.Replace(m.Groups[1].Value, @"<[^>]*>", "").Trim())
+                    .ToList();
+
+                for (int i = 1; i < rows.Count; i++)
+                {
+                    var cells = System.Text.RegularExpressions.Regex.Matches(
+                        rows[i].Value,
+                        @"<td[^>]*>([\s\S]*?)<\/td>",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Singleline
+                    );
+
+                    if (cells.Count == 0) continue;
+
+                    string modelName = System.Text.RegularExpressions.Regex.Replace(cells[0].Groups[1].Value, @"<[^>]*>", "").Trim();
+                    sbTable.AppendLine($"🔹 <strong>{modelName.ToUpper()}</strong><br>");
+
+                    for (int j = 1; j < cells.Count && j < headers.Count; j++)
+                    {
+                        string cellContent = cells[j].Groups[1].Value.Trim();
+                        string value = cellContent;
+
+                        // Если внутри ячейки сырой URL (например, из плейсхолдера) — оборачиваем его в честный HTML-тег кликабельной ссылки
+                        if (cellContent.StartsWith("http") && !cellContent.Contains("<a "))
+                        {
+                            value = $"<a href=\"{cellContent}\">Купить на Яндекс.Маркет</a>";
+                        }
+                        else if (!cellContent.Contains("<a "))
+                        {
+                            value = System.Text.RegularExpressions.Regex.Replace(cellContent, @"<[^>]*>", "").Trim();
+                        }
+
+                        sbTable.AppendLine($" ▪ {headers[j]}: {value}<br>");
+                    }
+                    sbTable.AppendLine("<br>");
+                }
+                sbTable.AppendLine("───────────────────────────────────<br>");
+                processedText = processedText.Replace(tableMatch.Value, sbTable.ToString());
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("[TABLE_CONV] Ошибка форматирования: " + ex.Message);
+        }
+        return processedText;
     }
 
 }
