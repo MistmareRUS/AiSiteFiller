@@ -242,11 +242,29 @@ public class DzenPublisherService : IPublisherService, IDisposable
         // --------------------------------------------------------
         try
         {
+            // Базовая очистка HTML-разметки исходной статьи
             string cleanText = Regex.Replace(contentHtml.Replace("<p>", "\n\n").Replace("<br>", "\n"), @"<[^>]*>", "");
+
             if (_isGroomingMode)
             {
                 _logger.LogInformation("[DZEN] Включен режим прогрева канала. Удаляю CPA-ссылки...");
                 cleanText = Regex.Replace(cleanText, @"https?://[^\s]+", "[информация доступна в источнике]");
+            }
+            else
+            {
+                _logger.LogInformation("[DZEN] Режим прогрева отключен. Формирую рекламный хвост со ссылкой на сайт...");
+
+                // Генерируем маскированную CPA-ссылку на сайт (используем ваш хелпер)
+                string domainId = "tech-info";
+                string maskedCpaUrl = Application.Helpers.CpaLinkHelper.GenerateMaskedVkLink(title, domainId);
+
+                // Собираем текстовый рекламный блок (без HTML-тегов, Дзен сам сделает URL кликабельным)
+                var sbDzenTail = new StringBuilder();
+                sbDzenTail.AppendLine("\n\n🚀 Читать полный обзор и сравнить актуальные цены на нашем сайте:");
+                sbDzenTail.AppendLine(maskedCpaUrl);
+
+                // Дописываем хвост к очищенному тексту статьи
+                cleanText += sbDzenTail.ToString();
             }
 
             IWebElement bodyField = wait.Until(d => d.FindElement(By.XPath(
