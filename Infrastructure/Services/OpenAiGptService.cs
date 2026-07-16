@@ -287,7 +287,6 @@ public class OpenAiGptService : IAiService
 
     private class ImageData
     {
-        // Вместо [JsonPropertyName("url")]
         [JsonPropertyName("b64_json")]
         public string B64Json { get; set; } = string.Empty;
     }

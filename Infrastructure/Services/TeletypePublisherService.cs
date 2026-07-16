@@ -1,4 +1,5 @@
 ﻿using AiSiteFiller.Application.Interfaces;
+using AiSiteFiller.Domain.Enums;
 using Infrastructure.Helpers;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -17,6 +18,8 @@ public class TeletypePublisherService : IPublisherService, IDisposable
     private readonly ILogger<TeletypePublisherService> _logger;
     private IWebDriver? _driver;
     public string PlatformName => "TELETYPE";
+    public PublicationType PublishType => PublicationType.FullSeoArticle;
+
 
     public TeletypePublisherService(IConfiguration configuration, ILogger<TeletypePublisherService> logger)
     {

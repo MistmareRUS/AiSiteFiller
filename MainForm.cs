@@ -263,14 +263,8 @@ public class MainForm : Form
             new DzenPublisherService(_configuration, _loggerFactory.CreateLogger<DzenPublisherService>()),
             new TeletypePublisherService(_configuration, _loggerFactory.CreateLogger<TeletypePublisherService>()),
             new TelegramPublisherService(_configuration, _loggerFactory.CreateLogger<TelegramPublisherService>()),
-            // Сюда в будущем в одну строчку добавятся: new TelegramPublisherService(...)
+            new VcPublisherService(new System.Net.Http.HttpClient(), _configuration, _loggerFactory.CreateLogger<VcPublisherService>())
         };
-
-        //if (_publishers.FirstOrDefault(x => x.PlatformName == "DZEN") is DzenPublisherService dzenService)
-        //{
-        //    // Проверяем куку. Если она просрочена или скоро умрет, выскочит MessageBox
-        //    dzenService.IsCookieExpiringSoon(_configuration);
-        //}
 
         LogToUi("⚙️ Синхронизация структуры базы данных PostgreSQL через EF Core...");
 
@@ -473,27 +467,53 @@ public class MainForm : Form
                     {
                         targetPublisher = _publishers.Find(p => p is TeletypePublisherService);
                     }
+                    else if (pubTask.Platform.Equals("VC", StringComparison.OrdinalIgnoreCase))
+                    {                        
+                        targetPublisher = _publishers.Find(p => p is VcPublisherService);
+                    }
 
                     if (targetPublisher != null)
                     {
+                        // Оптимизация ссылок (CPA)
+                        string activeClid = _configuration["CpaOptions:CpaClid"] ?? string.Empty;
+                        string cpaOptimizedHtml = Application.Helpers.CpaLinkHelper.ReplacePlaceholdersWithSmartLinks(articleHtml, articleTask.Topic, activeClid);
+
+                        // Дополнительная проверка на DZEN для кук, как у тебя в оригинальном коде
+                        if (targetPublisher is DzenPublisherService dzenService)
+                        {
+                            dzenService.IsCookieExpiringSoon(_configuration);
+                        }
+
                         Invoke(() => LogToUi($"🚀 Отправляю публикацию в [{pubTask.Platform}]..."));
 
-                        // 1. Вытягиваем наш живой партнерский ID из конфига appsettings.local.json
-                        string activeClid = _configuration["CpaOptions:CpaClid"] ?? string.Empty;
-
-                        // 2. Передаем его третьим аргументом в умный CPA-конвейер
-                        string cpaOptimizedHtml = AiSiteFiller.Application.Helpers.CpaLinkHelper.ReplacePlaceholdersWithSmartLinks(articleHtml, articleTask.Topic, activeClid);
-
-                        if (targetPublisher != null)
+                        // Проверяем тип публикации напрямую у самого сервиса издателя
+                        if (targetPublisher.PublishType == Domain.Enums.PublicationType.FullSeoArticle)
                         {
-                            Invoke(() => LogToUi($"🚀 Отправляю публикацию в [{pubTask.Platform}] с умными CPA-ссылками из конфига..."));
+                            // Группа SEO-Автономии: шлем полную статью
                             isSuccess = await targetPublisher.PublishAsync(articleTask.Topic, cpaOptimizedHtml, articleTask.Category, articleTask.SiteId, imageBytes);
+                        }
+                        else if (targetPublisher.PublishType == Domain.Enums.PublicationType.AnnouncementOnly)
+                        {
+                            // Группа Соцсетей: автоматически готовим короткий SEO-анонс
+                            Invoke(() => LogToUi($"🔗 Робот переключился в режим SEO-Анонса для [{pubTask.Platform}]"));
+
+                            // Атомарно собираем ссылку-донор на твой WordPress (Защита от багов UI по README.AI.md)
+                            string targetArticleUrl = "https://" + "tech-info." + "ru/" + "article/" + articleTask.Id;
+
+                            // Безопасно очищаем от HTML и берем тизер
+                            string pureText = System.Text.RegularExpressions.Regex.Replace(cpaOptimizedHtml, @"<[^>]*>", "").Trim();
+                            string cleanSnippet = pureText.Length > 300 ? pureText.Substring(0, 300) + "..." : pureText;
+
+                            string finalAnnouncementText = cleanSnippet + "\n\n👉 Читать обзор полностью: " + targetArticleUrl;
+
+                            isSuccess = await targetPublisher.PublishAsync(articleTask.Topic, finalAnnouncementText, articleTask.Category, articleTask.SiteId, imageBytes);
                         }
                     }
                     else
                     {
                         throw new Exception($"Не найден зарегистрированный сервис для платформы {pubTask.Platform}");
                     }
+
                 }
                 catch (Exception pubEx)
                 {
@@ -589,20 +609,23 @@ public class MainForm : Form
 
     private async void BtnGeneratePlan_Click(object? sender, EventArgs e)
     {
+        int.TryParse(_configuration["PublicationAddCount"] ?? "0", out int publicationAddCount);
         _btnGeneratePlan.Enabled = false;
         LogToUi("🔮 [Планировщик] Запускаю массовый сбор SEO-тем через ИИ для всех рубрик...");
 
         try
         {
             // Запускаем сбор пачками по 5 штук для каждой нашей рубрики констант
-            int count1 = await _contentPlanner.PopulateQueueWithTrendingTopicsAsync(Domain.Constants.AppCategories.SmartHome, 3);
+            int count1 = await _contentPlanner.PopulateQueueWithTrendingTopicsAsync(Domain.Constants.AppCategories.SmartHome, publicationAddCount);
             LogToUi($"[Планировщик] Добавлено {count1} тем в рубрику Умный Дом.");
 
-            int count2 = await _contentPlanner.PopulateQueueWithTrendingTopicsAsync(Domain.Constants.AppCategories.Smartphones, 3);
+            int count2 = await _contentPlanner.PopulateQueueWithTrendingTopicsAsync(Domain.Constants.AppCategories.Smartphones, publicationAddCount);
             LogToUi($"[Планировщик] Добавлено {count2} тем в рубрику Смартфоны.");
 
-            int count3 = await _contentPlanner.PopulateQueueWithTrendingTopicsAsync(Domain.Constants.AppCategories.Gadgets, 3);
+            int count3 = await _contentPlanner.PopulateQueueWithTrendingTopicsAsync(Domain.Constants.AppCategories.Gadgets, publicationAddCount);
             LogToUi($"[Планировщик] Добавлено {count3} тем в рубрику Гаджеты.");
+
+            //todo: Audio
 
             LogToUi("🚀 [Планировщик] Контент-план успешно создан! База данных PostgreSQL заполнена.");
             await RefreshGridAsync();  // Перерисовываем таблицу на экране, чтобы увидеть новые задачи

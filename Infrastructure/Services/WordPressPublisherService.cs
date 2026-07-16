@@ -1,4 +1,5 @@
 ﻿using AiSiteFiller.Application.Interfaces;
+using AiSiteFiller.Domain.Enums;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System.Net.Http.Headers;
@@ -15,6 +16,8 @@ public class WordPressPublisherService : IPublisherService
     private readonly IConfiguration _configuration;
     
     public string PlatformName => "WordPress";
+    public PublicationType PublishType => PublicationType.FullSeoArticle;
+
 
     public WordPressPublisherService(IConfiguration configuration, ILogger<WordPressPublisherService> logger)
     {

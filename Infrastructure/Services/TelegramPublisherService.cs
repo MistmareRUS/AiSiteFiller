@@ -1,4 +1,5 @@
 ﻿using AiSiteFiller.Application.Interfaces;
+using AiSiteFiller.Domain.Enums;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System.Net.Http.Json;
@@ -12,6 +13,8 @@ namespace AiSiteFiller.Infrastructure.Services
         private readonly string _bridgeUrl, _bridgeToken, _botToken, _chatId;
 
         public string PlatformName => "Telegram";
+        public PublicationType PublishType => PublicationType.AnnouncementOnly;
+
 
         public TelegramPublisherService(IConfiguration configuration, ILogger<TelegramPublisherService> logger)
         {

@@ -1,4 +1,5 @@
 ﻿using AiSiteFiller.Application.Interfaces;
+using AiSiteFiller.Domain.Enums;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System.Security.Cryptography;
@@ -13,6 +14,8 @@ public class OkPublisherService : IPublisherService
     private readonly string _accessToken, _groupId, _applicationKey, _secretKey;
     private readonly ILogger<OkPublisherService> _logger;
     public string PlatformName => "OK";
+    public PublicationType PublishType => PublicationType.AnnouncementOnly;
+
 
     public OkPublisherService(IConfiguration configuration, ILogger<OkPublisherService> logger)
     {

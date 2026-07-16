@@ -68,6 +68,7 @@ public class ContentPlannerService : IContentPlannerService
 
             await db.ArticlesQueue.AddRangeAsync(newTasks);
             await db.SaveChangesAsync();
+            //todo: add to PublicationTasks
 
             return newTasks.Count;
         }

@@ -1,4 +1,5 @@
 ﻿using AiSiteFiller.Application.Interfaces;
+using AiSiteFiller.Domain.Enums;
 using Infrastructure.Helpers;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -19,6 +20,8 @@ public class DzenPublisherService : IPublisherService, IDisposable
     private readonly bool _isDebugDraftMode = true;
     private IWebDriver? _driver;
     public string PlatformName => "DZEN";
+    public PublicationType PublishType => PublicationType.FullSeoArticle;
+
 
     public DzenPublisherService(IConfiguration configuration, ILogger<DzenPublisherService> logger)
     {

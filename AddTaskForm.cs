@@ -1,8 +1,4 @@
-﻿using System;
-using System.Drawing;
-using System.Windows.Forms;
-using AiSiteFiller.Domain.Entities;
-using AiSiteFiller.Domain.Enums;
+﻿using AiSiteFiller.Domain.Entities;
 using AiSiteFiller.Infrastructure.Data;
 
 namespace AiSiteFiller;

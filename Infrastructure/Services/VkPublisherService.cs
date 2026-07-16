@@ -1,4 +1,5 @@
 ﻿using AiSiteFiller.Application.Interfaces;
+using AiSiteFiller.Domain.Enums;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System.Text;
@@ -13,6 +14,8 @@ public class VkPublisherService : IPublisherService
     private readonly ILogger<VkPublisherService> _logger;
 
     public string PlatformName => "VK";
+    public PublicationType PublishType => PublicationType.AnnouncementOnly;
+
 
     public VkPublisherService(IConfiguration configuration, ILogger<VkPublisherService> logger)
     {
