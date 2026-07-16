@@ -1,9 +1,15 @@
 файловый менеджер:https://sprutio.beget.com/
 для переброса на маркет, яспользую ссылки с "/go" в файл htaccess вставлен кусок
 <IfModule mod_rewrite.c>
-RewriteEngine On
-RewriteRule ^go/(.*)$ https://yandex.ru [R=302,L]
+    RewriteEngine On
+
+    # Часть 1: редирект если хвост пустой
+    RewriteRule ^go/?$ https:// + market. + yandex. + ru/?clid=ТУТ_НАШ_ID [R=302,L]
+
+    # Часть 2: динамический перенос слага в поиск Маркета
+    RewriteRule ^go/(.*)$ https:// + market. + yandex. + ru/search?text=$1&clid=ТУТ_НАШ_ID [R=302,L]
 </IfModule>
+
 
 
 

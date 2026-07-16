@@ -230,8 +230,9 @@ public class TeletypePublisherService : IPublisherService, IDisposable
             // 4. Склеиваем тело статьи с финальным рекламным блоком (используем тег <a> для кликабельности)
             var sbFinalBody = new StringBuilder();
             sbFinalBody.Append(convertedHtml);
-            sbFinalBody.AppendLine("<br><br>🚀 <strong>Читать полный обзор и сравнить актуальные цены на нашем сайте:</strong> ");
-            sbFinalBody.AppendLine($"<a href=\"{maskedCpaUrl}\">{maskedCpaUrl}</a><br>");
+            sbFinalBody.AppendLine("<br><br>🚀 <strong>Читать обзор на нашем </strong> ");
+            sbFinalBody.AppendLine($"<a href=\"{("https://" + domainId + ".mistmare.ru")}\">сайте</a>");
+            sbFinalBody.AppendLine($"<span> или </span><a href=\"{maskedCpaUrl}\">узнать цены</a><br>");
 
             string finalContentHtml = sbFinalBody.ToString();
 
@@ -305,25 +306,25 @@ public class TeletypePublisherService : IPublisherService, IDisposable
         {
             try
             {
-                _logger.LogInformation("[TELETYPE] Режим отладки активен. Ищу радиокнопку 'Черновик' по вашей верстке...");
+                _logger.LogInformation("[TELETYPE] Режим отладки активен. Ищу радиокнопку 'Скрыта' по вашей верстке...");
 
-                // Находим строго input с value="draft" по коду из вашего файла 1.html
-                IWebElement draftRadio = _driver.FindElement(By.XPath(
-                    "//input[@name='visibility' and @value='draft']" +
-                    "| //div[contains(@class, 'visibility')]//input[@value='draft']"
+                // Находим строго input с value="direct" по коду из вашего файла 1.html
+                IWebElement directRadio = _driver.FindElement(By.XPath(
+                    "//input[@name='visibility' and @value='direct']" +
+                    "| //div[contains(@class, 'visibility')]//input[@value='direct']"
                 ));
 
                 // В Vue.js/Телетайпе кликать нужно по родительскому контейнеру label или элементу-обертке,
                 // так как сам input может быть скрыт стилями opacity
-                IWebElement radioLabel = draftRadio.FindElement(By.XPath("./ancestor::label"));
+                IWebElement radioLabel = directRadio.FindElement(By.XPath("./ancestor::label"));
                 radioLabel.Click();
 
-                _logger.LogInformation("[TELETYPE] Радиокнопка 'Черновик' успешно активирована в шторке.");
+                _logger.LogInformation("[TELETYPE] Радиокнопка 'Скрыта' успешно активирована в шторке.");
                 await Task.Delay(1000);
             }
             catch (Exception cbEx)
             {
-                _logger.LogWarning("[TELETYPE] ⚠️ Предупреждение: Не удалось переключить приватность на 'Черновик': " + cbEx.Message);
+                _logger.LogWarning("[TELETYPE] ⚠️ Предупреждение: Не удалось переключить приватность на 'Скрыта': " + cbEx.Message);
             }
         }
 
@@ -573,7 +574,7 @@ public class TeletypePublisherService : IPublisherService, IDisposable
                         // Если внутри ячейки сырой URL (например, из плейсхолдера) — оборачиваем его в честный HTML-тег кликабельной ссылки
                         if (cellContent.StartsWith("http") && !cellContent.Contains("<a "))
                         {
-                            value = $"<a href=\"{cellContent}\">Купить на Яндекс.Маркет</a>";
+                            value = $"<a href=\"{cellContent}\">Яндекс.Маркет</a>";
                         }
                         else if (!cellContent.Contains("<a "))
                         {
