@@ -1,0 +1,12 @@
+файловый менеджер:https://sprutio.beget.com/
+для переброса на маркет, яспользую ссылки с "/go" в файл htaccess вставлен кусок
+<IfModule mod_rewrite.c>
+RewriteEngine On
+RewriteRule ^go/(.*)$ https://yandex.ru [R=302,L]
+</IfModule>
+
+
+
+
+### telegram ###
+чтобы пересылать с beget запросы в телегу добавлен файл tg_bridge.php
