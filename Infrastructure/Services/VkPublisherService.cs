@@ -9,9 +9,8 @@ namespace AiSiteFiller.Infrastructure.Services;
 
 public class VkPublisherService : IPublisherService
 {
-    private readonly string _accessToken;
-    private readonly string _groupId;
     private readonly ILogger<VkPublisherService> _logger;
+    private readonly IConfiguration _configuration;
 
     public string PlatformName => "VK";
     public PublicationType PublishType => PublicationType.AnnouncementOnly;
@@ -20,14 +19,13 @@ public class VkPublisherService : IPublisherService
     public VkPublisherService(IConfiguration configuration, ILogger<VkPublisherService> logger)
     {
         _logger = logger;
-        _accessToken = (configuration["VkOptions:AccessToken"] ?? string.Empty).Replace("\n", "").Replace("\r", "").Trim();
-        _groupId = (configuration["VkOptions:GroupId"] ?? string.Empty).Replace("\n", "").Replace("\r", "").Trim();
+        _configuration = configuration;
     }
 
     public async Task<bool> PublishAsync(string title, string contentHtml, string metadata, string siteId, byte[]? imageBytes)
     {
-        string cleanToken = _accessToken;
-        string cleanGroup = _groupId;
+        string cleanToken = (_configuration["VkOptions:AccessToken"] ?? string.Empty).Replace("\n", "").Replace("\r", "").Trim();
+        string cleanGroup = (_configuration["VkOptions:GroupId"] ?? string.Empty).Replace("\n", "").Replace("\r", "").Trim();
 
         if (string.IsNullOrEmpty(cleanToken) || string.IsNullOrEmpty(cleanGroup))
         {
@@ -110,8 +108,9 @@ public class VkPublisherService : IPublisherService
             cleanText = System.Text.RegularExpressions.Regex.Replace(cleanText, @"<[^>]*>", "");
 
             // 3. УМНАЯ СРАБОТКА CPA-КОНВЕЙЕРА ДЛЯ ВК: Формируем красивую маскированную ссылку
-            string domainId = "tech-info"; // Наш рабочий поддомен
-            string maskedCpaUrl = Application.Helpers.CpaLinkHelper.GenerateMaskedVkLink(title, domainId);
+            string domainId = _configuration["WordPressSites:Id"] ?? string.Empty;
+            string clid = _configuration["CpaOptions:CpaClid"] ?? string.Empty;
+            string maskedCpaUrl = Application.Helpers.CpaLinkHelper.GenerateMaskedVkLink(title, domainId, clid);
 
             // Склеиваем сочный продающий текст анонса для умной ленты ВК по договору конкатенации
             string finalPostText = "📰 " + title.ToUpper() + "\n\n" +
@@ -127,7 +126,6 @@ public class VkPublisherService : IPublisherService
             isolatedClient.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
 
             // ПОДБЛОК ЗАГРУЗКИ КАРТИНКИ В ВК: Выполняем только если байты обложки успешно извлечены из MongoDB GridFS
-            // ПОДБЛОК ЗАГРУЗКИ КАРТИНКИ В ВК
             if (imageBytes != null && imageBytes.Length > 0)
             {
                 _logger.LogInformation("[VK] Обложка обнаружена. Запускаю трехшаговую загрузку медиа-файла на сервера ВКонтакте...");
@@ -174,12 +172,7 @@ public class VkPublisherService : IPublisherService
                             var saveResponse = await isolatedClient.PostAsync(savePhotoUri, null);
                             string saveResultStr = Encoding.UTF8.GetString(await saveResponse.Content.ReadAsByteArrayAsync()).Trim();
 
-                            // ЖЕЛЕЗНЫЙ ДЕБАГ: Принудительно выбрасываем ошибку с полным сырым ответом ВК,
-                            // чтобы этот JSON вывелся на экран во всплывающем MessageBox!
-                            //throw new Exception("СЫРОЙ ОТВЕТ ВК (ШАГ В):\n\n" + saveResultStr);
-
                             using var saveDoc = JsonDocument.Parse(saveResultStr);
-
 
                             // Если на финальном шаге ВК вернул ошибку — пробрасываем её наружу для MessageBox
                             if (saveDoc.RootElement.TryGetProperty("error", out var saveErrorEl))

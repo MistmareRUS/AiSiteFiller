@@ -224,8 +224,9 @@ public class TeletypePublisherService : IPublisherService, IDisposable
             string convertedHtml = ConvertHtmlTableToTeletypeText(contentHtml ?? "");
 
             // 3. Формируем маскированную CPA-ссылку на наш сайт (как для ВК)
-            string domainId = "tech-info";
-            string maskedCpaUrl = Application.Helpers.CpaLinkHelper.GenerateMaskedVkLink(title, domainId);
+            string domainId = _configuration["WordPressSites:Id"] ?? string.Empty;
+            string clid = _configuration["CpaOptions:CpaClid"] ?? string.Empty;
+            string maskedCpaUrl = Application.Helpers.CpaLinkHelper.GenerateMaskedVkLink(title, domainId, clid);
 
             // 4. Склеиваем тело статьи с финальным рекламным блоком (используем тег <a> для кликабельности)
             var sbFinalBody = new StringBuilder();

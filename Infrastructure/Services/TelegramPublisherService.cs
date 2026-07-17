@@ -14,6 +14,7 @@ namespace AiSiteFiller.Infrastructure.Services
 
         public string PlatformName => "Telegram";
         public PublicationType PublishType => PublicationType.AnnouncementOnly;
+        private readonly IConfiguration _configuration;
 
 
         public TelegramPublisherService(IConfiguration configuration, ILogger<TelegramPublisherService> logger)
@@ -24,6 +25,7 @@ namespace AiSiteFiller.Infrastructure.Services
             _bridgeToken = (configuration["TelegramOptions:BridgeToken"] ?? string.Empty).Replace("\n", "").Replace("\r", "").Trim();
             _botToken = (configuration["TelegramOptions:BotToken"] ?? string.Empty).Replace("\n", "").Replace("\r", "").Trim();
             _chatId = (configuration["TelegramOptions:ChatId"] ?? string.Empty).Replace("\n", "").Replace("\r", "").Trim();
+            _configuration = configuration;
         }
 
         // Реализация интерфейса (5 параметров)
@@ -35,7 +37,9 @@ namespace AiSiteFiller.Infrastructure.Services
             {
                 // 1. Формирование текста и ссылки (остается без изменений)
                 string formattedText = PrepareHtmlForTelegram(title, contentHtml);
-                string maskedCpaUrl = Application.Helpers.CpaLinkHelper.GenerateMaskedVkLink(title, "tech-info");
+                string domainId = _configuration["WordPressSites:Id"] ?? string.Empty;
+                string clid = _configuration["CpaOptions:CpaClid"] ?? string.Empty;
+                string maskedCpaUrl = Application.Helpers.CpaLinkHelper.GenerateMaskedVkLink(title, domainId, clid);
                 string finalPostText = $"🔥 <b>{title.ToUpper()}</b>\n\n{formattedText}\n\n🚀 <a href=\"{maskedCpaUrl}\">Сравнить цены</a>";
 
                 // 2. Кодируем картинку в Base64, если она есть

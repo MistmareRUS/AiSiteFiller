@@ -43,9 +43,8 @@ public static class CpaLinkHelper
         return htmlContent;
     }
 
-    public static string GenerateMaskedVkLink(string articleTitle, string siteId)
+    public static string GenerateMaskedVkLink(string articleTitle, string siteId, string cpaClid)
     {
-        return "https://" + siteId + ".mistmare.ru" + "/go/?clid=" + ;
         // 1. Очищаем тему от мусорных SEO-слов
         string searchQuery = articleTitle;
         searchQuery = Regex.Replace(searchQuery, @"(?i)(сравнение|лучших|обзор|тест|в 2026 году|против|vs|какую выбрать|рейтинг|отзывы|характеристики)", " ");
@@ -66,7 +65,7 @@ public static class CpaLinkHelper
 
         // 2. СОБИРАЕМ КРАСИВЫЙ РЕДИРЕКТ-URL НА ВАШЕМ ПОДДОМЕНЕ ПО ДОГОВОРУ КОНКАТЕНАЦИИ
         // Ссылка будет вести на ваш сайт в специальную папку перенаправлений /go/
-        string maskedUrl = "https://" + siteId + ".mistmare.ru" + "/go/" + cleanSlug;
+        string maskedUrl = "https://" + siteId + ".mistmare.ru" + "/go/" + cleanSlug +"? clid = " + cpaClid;
 
         return maskedUrl;
     }

@@ -16,6 +16,8 @@ public class OkPublisherService : IPublisherService
     public string PlatformName => "OK";
     public PublicationType PublishType => PublicationType.AnnouncementOnly;
 
+    private readonly IConfiguration _configuration;
+
 
     public OkPublisherService(IConfiguration configuration, ILogger<OkPublisherService> logger)
     {
@@ -24,6 +26,7 @@ public class OkPublisherService : IPublisherService
         _groupId = (configuration["OkOptions:GroupId"] ?? "").Replace("\n", "").Trim();
         _applicationKey = (configuration["OkOptions:ApplicationKey"] ?? "").Replace("\n", "").Trim();
         _secretKey = (configuration["OkOptions:SecretKey"] ?? "").Replace("\n", "").Trim();
+        _configuration = configuration;
     }
 
     private string CalculateSignature(Dictionary<string, string> parameters, string accessToken, string secretKey)
@@ -98,7 +101,9 @@ public class OkPublisherService : IPublisherService
         // ==========================================
 
         // 1. Вытягиваем партнерский маскированный URL для рекламного сниппета внизу поста
-        string maskedCpaUrl = Application.Helpers.CpaLinkHelper.GenerateMaskedVkLink(title, "tech-info");
+        string domainId = _configuration["WordPressSites:Id"] ?? string.Empty;
+        string clid = _configuration["CpaOptions:CpaClid"] ?? string.Empty;
+        string maskedCpaUrl = Application.Helpers.CpaLinkHelper.GenerateMaskedVkLink(title, domainId, clid);
 
         // 2. Очищаем HTML-теги, превращая абзацы и переносы строк в текстовый формат
         string cleanText = Regex.Replace(textWithFormattedTables.Replace("<p>", "\n\n").Replace("<br>", "\n"), @"<[^>]*>", "");

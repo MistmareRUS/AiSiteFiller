@@ -21,12 +21,14 @@ public class DzenPublisherService : IPublisherService, IDisposable
     private IWebDriver? _driver;
     public string PlatformName => "DZEN";
     public PublicationType PublishType => PublicationType.FullSeoArticle;
+    private readonly IConfiguration _configuration;
 
 
     public DzenPublisherService(IConfiguration configuration, ILogger<DzenPublisherService> logger)
     {
         // Для логгера используем общую фабрику
         _logger = logger;
+        _configuration = configuration;
         _dzenChannelId = (configuration["DzenOptions:SessionId"] ?? "").Trim();
         bool.TryParse(configuration["DzenOptions:IsGroomingMode"], out _isGroomingMode);
         bool.TryParse(configuration["DzenOptions:IsDebugDraftMode"], out _isDebugDraftMode);
@@ -109,12 +111,12 @@ public class DzenPublisherService : IPublisherService, IDisposable
             options.AddArgument("--no-sandbox");
             options.AddArgument("--disable-dev-shm-usage");
 
-            string dzenProfileDir = "D:\\" + "Repositories\\" + "AiSiteFiller\\" + "DzenWebDriverProfile";
-            if (!Directory.Exists(dzenProfileDir))
-            {
-                Directory.CreateDirectory(dzenProfileDir);
-            }
-            options.AddArgument("--user-data-dir=" + dzenProfileDir);
+            //string dzenProfileDir = "D:\\" + "Repositories\\" + "AiSiteFiller\\" + "DzenWebDriverProfile";
+            //if (!Directory.Exists(dzenProfileDir))
+            //{
+            //    Directory.CreateDirectory(dzenProfileDir);
+            //}
+            //options.AddArgument("--user-data-dir=" + dzenProfileDir);
             options.AddArgument("--disable-extensions");
 
             _driver = new ChromeDriver(options);
@@ -259,8 +261,9 @@ public class DzenPublisherService : IPublisherService, IDisposable
                 _logger.LogInformation("[DZEN] Режим прогрева отключен. Формирую рекламный хвост со ссылкой на сайт...");
 
                 // Генерируем маскированную CPA-ссылку на сайт (используем ваш хелпер)
-                string domainId = "tech-info";
-                string maskedCpaUrl = Application.Helpers.CpaLinkHelper.GenerateMaskedVkLink(title, domainId);
+                string domainId = _configuration["WordPressSites:Id"] ?? string.Empty;
+                string clid = _configuration["CpaOptions:CpaClid"] ?? string.Empty;
+                string maskedCpaUrl = Application.Helpers.CpaLinkHelper.GenerateMaskedVkLink(title, domainId, clid);
 
                 // Собираем текстовый рекламный блок (без HTML-тегов, Дзен сам сделает URL кликабельным)
                 var sbDzenTail = new StringBuilder();
