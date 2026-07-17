@@ -14,7 +14,6 @@ namespace AiSiteFiller.Infrastructure.Services;
 
 public class DzenPublisherService : IPublisherService, IDisposable
 {
-    private readonly string _dzenChannelId;
     private readonly ILogger<DzenPublisherService> _logger;
     private readonly bool _isGroomingMode = true;
     private readonly bool _isDebugDraftMode = true;
@@ -29,7 +28,6 @@ public class DzenPublisherService : IPublisherService, IDisposable
         // Для логгера используем общую фабрику
         _logger = logger;
         _configuration = configuration;
-        _dzenChannelId = (configuration["DzenOptions:SessionId"] ?? "").Trim();
         bool.TryParse(configuration["DzenOptions:IsGroomingMode"], out _isGroomingMode);
         bool.TryParse(configuration["DzenOptions:IsDebugDraftMode"], out _isDebugDraftMode);
     }
@@ -148,7 +146,7 @@ public class DzenPublisherService : IPublisherService, IDisposable
             }
 
             // 4. ПЕРЕХОД В ВАШУ ЛИЧНУЮ СТУДИЮ ПО ХАРДКОД-ССЫЛКЕ
-            string studioUrl = "https://" + "dzen." + "ru/" + "profile/" + "editor/" + "id/" + _dzenChannelId + "/" + "publications";
+            string studioUrl = "https://" + "dzen." + "ru/" + "profile/" + "editor/" + "id/" + (_configuration["DzenOptions:SessionId"] ?? "").Trim() + "/" + "publications";
             _driver.Navigate().GoToUrl(studioUrl);
             _logger.LogInformation("[DZEN] Открываю вашу личную Студию: " + studioUrl);
 
@@ -175,6 +173,12 @@ public class DzenPublisherService : IPublisherService, IDisposable
         catch (Exception ex)
         {
             _logger.LogError("[DZEN] Критическая ошибка конвейера: " + ex.Message);
+            System.Windows.Forms.MessageBox.Show(
+                "Похоже, протухла _dzenChannelId. Проверь, что в адресной строке браузера! И какой сейчас id при ручном добавлении статьи",
+                "Авторизация в Дзен",
+                System.Windows.Forms.MessageBoxButtons.OK,
+                System.Windows.Forms.MessageBoxIcon.Error
+            );
             return false;
         }
         finally
@@ -269,6 +273,11 @@ public class DzenPublisherService : IPublisherService, IDisposable
                 var sbDzenTail = new StringBuilder();
                 sbDzenTail.AppendLine("\n\n🚀 Читать полный обзор и сравнить актуальные цены на нашем сайте:");
                 sbDzenTail.AppendLine(maskedCpaUrl);
+
+
+                sbDzenTail.AppendLine("<br><br>🚀 <strong>Читать обзор на нашем </strong> ");
+                sbDzenTail.AppendLine($"<a href=\"{("https://" + domainId + ".mistmare.ru")}\">сайте</a>");
+                sbDzenTail.AppendLine($"<span> или </span><a href=\"{maskedCpaUrl}\">узнать цены</a><br>");
 
                 // Дописываем хвост к очищенному тексту статьи
                 cleanText += sbDzenTail.ToString();
